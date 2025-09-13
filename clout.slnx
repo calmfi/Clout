@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Clout.Client/Clout.Client.csproj" />
+  <Project Path="Clout.Api/Clout.Api.csproj" />
+  <Project Path="Cloud.Shared/Cloud.Shared.csproj" />
+  <Project Path="tests/Clout.Api.IntegrationTests/Clout.Api.IntegrationTests.csproj" />
+</Solution>
