@@ -16,6 +16,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Clout.Api\Clout.Api.csproj" />
     <ProjectReference Include="..\..\Cloud.Shared\Cloud.Shared.csproj" />
+    <ProjectReference Include="..\FunctionSamples\FunctionSamples.csproj" />
   </ItemGroup>
 </Project>
-

@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi.Models;
 using Cloud.Shared;
 using Clout.Api;
+using System.Reflection;
+using System.Runtime.Loader;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -130,6 +132,86 @@ app.MapDelete("/api/blobs/{id}", async (string id, IBlobStorage storage, Cancell
     .WithName("DeleteBlob")
     .WithTags("Blobs")
     .WithDescription("Delete a blob by identifier.")
+    .WithOpenApi();
+
+// Cancellation: see AGENTS.md > "Cancellation & Async"
+app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        try
+        {
+            if (!request.HasFormContentType)
+                return Results.Text("Expected multipart/form-data with fields: 'file' (dll), 'name' (function), 'runtime' (dotnet core).", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            var form = await request.ReadFormAsync(ct);
+            var file = form.Files["file"];
+            var name = form["name"].ToString();
+            var runtime = form["runtime"].ToString();
+
+            if (file is null) return Results.Text("Missing 'file' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            if (string.IsNullOrWhiteSpace(name)) return Results.Text("Missing 'name' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            if (string.IsNullOrWhiteSpace(runtime)) return Results.Text("Missing 'runtime' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            // Only .NET Core (aka .NET) is supported at the moment
+            var rt = runtime.Trim().ToLowerInvariant();
+            var allowed = new[] { "dotnet", ".net", ".net core", "dotnetcore", "netcore", "net" };
+            if (!allowed.Contains(rt))
+            {
+                return Results.Text("Unsupported runtime. Only '.NET Core' is allowed (e.g., 'dotnet' or 'dotnetcore').", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            }
+
+            if (!file.FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Text("Entrypoint must be a single .dll file.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            }
+
+            // Persist upload to a temp file for validation and then store in blob storage
+            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
+            await using (var outStream = File.Create(tempPath))
+            await using (var inStream = file.OpenReadStream())
+            {
+                await inStream.CopyToAsync(outStream, ct);
+            }
+
+            try
+            {
+                var validation = FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType);
+                if (!validation)
+                {
+                    return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+                }
+
+                // Save validated DLL to blob storage
+                await using var dllStream = File.OpenRead(tempPath);
+                var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct);
+
+                // Attach function metadata to the blob
+                var metadata = new List<BlobMetadata>
+                {
+                    new("function.name", "text/plain", name),
+                    new("function.runtime", "text/plain", ".net core"),
+                    new("function.entrypoint", "text/plain", file.FileName),
+                    new("function.declaringType", "text/plain", declaringType ?? string.Empty),
+                    new("function.verified", "text/plain", "true")
+                };
+
+                var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
+                var result = updated ?? info;
+                var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
+            }
+            finally
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            return Results.Text($"Validation error: {ex.Message}", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+    })
+    .WithName("RegisterFunction")
+    .WithTags("Functions")
+    .WithDescription("Register a .NET Core function by uploading its entrypoint DLL. Validates the DLL contains a public method matching the function name.")
     .WithOpenApi();
 
 app.Run();

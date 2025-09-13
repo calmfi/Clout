@@ -23,6 +23,19 @@ internal class Program
         {
             switch (args[0].ToLowerInvariant())
             {
+                case "functions":
+                    {
+                        if (args.Length < 3) return Fail("Usage: functions register <dllPath> <name> [runtime=dotnet]");
+                        var action = args[1].ToLowerInvariant();
+                        if (action != "register") return Fail("Only 'functions register' is supported.");
+                        var dllPath = args[2];
+                        var name = args.Length >= 4 ? args[3] : null;
+                        if (string.IsNullOrWhiteSpace(name)) return Fail("Usage: functions register <dllPath> <name> [runtime=dotnet]");
+                        var runtime = args.Length >= 5 ? args[4] : "dotnet";
+                        var result = await client.RegisterFunctionAsync(dllPath, name!, runtime, ct);
+                        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                        return 0;
+                    }
                 case "metadata":
                     {
                         if (args.Length < 3) return Fail("Usage: metadata set <id> <name> <content-type> <value> [<name> <content-type> <value> ...]");
@@ -110,6 +123,7 @@ internal class Program
         Console.WriteLine("  clout upload <filePath>");
         Console.WriteLine("  clout download <id> <destPath>");
         Console.WriteLine("  clout delete <id>");
+        Console.WriteLine("  clout functions register <dllPath> <name> [runtime=dotnet]");
         Console.WriteLine("  clout metadata set <id> <name> <content-type> <value> [<name> <content-type> <value> ...]");
         Console.WriteLine();
         Console.WriteLine("Set API base with CLOUT_API (default http://localhost:5000)");

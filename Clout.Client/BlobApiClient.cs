@@ -96,5 +96,27 @@ public sealed class BlobApiClient
         var result = await response.Content.ReadFromJsonAsync<BlobInfo>(cancellationToken: cancellationToken);
         return result!;
     }
+
+    /// <summary>
+    /// Registers a function by uploading its .NET entrypoint DLL and metadata.
+    /// </summary>
+    /// <param name="dllPath">Path to the function .dll.</param>
+    /// <param name="name">Function name. Assembly must contain a public method with this name.</param>
+    /// <param name="runtime">Runtime identifier (default: "dotnet").</param>
+    public async Task<BlobInfo> RegisterFunctionAsync(string dllPath, string name, string runtime = "dotnet", CancellationToken cancellationToken = default)
+    {
+        using var form = new MultipartFormDataContent();
+        await using var fs = File.OpenRead(dllPath);
+        var file = new StreamContent(fs);
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(file, "file", Path.GetFileName(dllPath));
+        form.Add(new StringContent(name), "name");
+        form.Add(new StringContent(runtime), "runtime");
+
+        var response = await _http.PostAsync("/api/functions/register", form, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<BlobInfo>(cancellationToken: cancellationToken);
+        return result!;
+    }
 }
 
