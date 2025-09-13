@@ -117,3 +117,13 @@ dotnet run --project Clout.Client -- blob delete <blobId>
 ```
 dotnet run --project Clout.Client -- blob metadata set <blobId> author text/plain alice
 ```
+
+## Sample Function
+
+- Build the sample function and schedule it to run every 10 seconds:
+
+```
+./scripts/register-sample-function.ps1 -Api http://localhost:5000
+```
+
+- The sample exposes a public method `Ping` in `Sample.Function.dll`. The registration script uses the client to upload the DLL and schedule it with NCRONTAB `*/10 * * * * *`.

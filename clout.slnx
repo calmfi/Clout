@@ -8,6 +8,9 @@
   <Folder Name="/Common/">
     <Project Path="Cloud.Shared/Cloud.Shared.csproj" />
   </Folder>
+  <Folder Name="/Samples/">
+    <Project Path="samples/Sample.Function/Sample.Function.csproj" />
+  </Folder>
   <Folder Name="/Tests/">
     <Project Path="tests/Clout.Api.IntegrationTests/Clout.Api.IntegrationTests.csproj" />
   </Folder>
