@@ -23,6 +23,28 @@ internal class Program
         {
             switch (args[0].ToLowerInvariant())
             {
+                case "metadata":
+                    {
+                        if (args.Length < 3) return Fail("Usage: metadata set <id> <name> <content-type> <value> [<name> <content-type> <value> ...]");
+                        var action = args[1].ToLowerInvariant();
+                        if (action != "set") return Fail("Only 'metadata set' is supported.");
+                        var id = args[2];
+                        if (((args.Length - 3) % 3) != 0 || args.Length < 6)
+                            return Fail("Provide name/content-type/value triples after the id.");
+
+                        var list = new List<BlobMetadata>();
+                        for (int i = 3; i < args.Length; i += 3)
+                        {
+                            var name = args[i];
+                            var ctType = args[i + 1];
+                            var value = args[i + 2];
+                            list.Add(new BlobMetadata(name, ctType, value));
+                        }
+
+                        var updated = await client.SetMetadataAsync(id, list, ct);
+                        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(updated, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                        return 0;
+                    }
                 case "list":
                     {
                         var blobs = await client.ListAsync(ct);
@@ -88,6 +110,7 @@ internal class Program
         Console.WriteLine("  clout upload <filePath>");
         Console.WriteLine("  clout download <id> <destPath>");
         Console.WriteLine("  clout delete <id>");
+        Console.WriteLine("  clout metadata set <id> <name> <content-type> <value> [<name> <content-type> <value> ...]");
         Console.WriteLine();
         Console.WriteLine("Set API base with CLOUT_API (default http://localhost:5000)");
     }

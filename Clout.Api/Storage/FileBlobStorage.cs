@@ -30,6 +30,10 @@ public sealed class FileBlobStorage : IBlobStorage
         var id = Guid.NewGuid().ToString("N");
         var (bin, meta) = Paths(id);
 
+        if (!Directory.Exists(_root))
+        {
+            Directory.CreateDirectory(_root);
+        }
         await using (var fs = File.Create(bin))
         {
             await content.CopyToAsync(fs, cancellationToken);
@@ -46,6 +50,10 @@ public sealed class FileBlobStorage : IBlobStorage
         var (bin, meta) = Paths(id);
         if (!File.Exists(bin) || !File.Exists(meta)) return null;
 
+        if (!Directory.Exists(_root))
+        {
+            Directory.CreateDirectory(_root);
+        }
         await using (var fs = File.Create(bin))
         {
             await content.CopyToAsync(fs, cancellationToken);
@@ -116,6 +124,18 @@ public sealed class FileBlobStorage : IBlobStorage
         }
     }
 
+    /// <inheritdoc />
+    public async Task<BlobInfo?> SetMetadataAsync(string id, IReadOnlyList<BlobMetadata> metadata, CancellationToken cancellationToken = default)
+    {
+        var (bin, metaPath) = Paths(id);
+        if (!File.Exists(metaPath)) return null;
+        var existing = await ReadMetaAsync(metaPath, cancellationToken);
+        if (existing is null) return null;
+        var updated = existing with { Metadata = metadata.ToList() };
+        await WriteMetaAsync(metaPath, updated, cancellationToken);
+        return updated;
+    }
+
     private (string bin, string meta) Paths(string id)
     {
         var bin = Path.Combine(_root, $"{id}.bin");
@@ -139,6 +159,11 @@ public sealed class FileBlobStorage : IBlobStorage
 
     private async Task WriteMetaAsync(string metaPath, BlobInfo info, CancellationToken cancellationToken)
     {
+        var dir = Path.GetDirectoryName(metaPath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
         await using var fs = File.Create(metaPath);
         await System.Text.Json.JsonSerializer.SerializeAsync(fs, info, _jsonOptions, cancellationToken);
     }

@@ -31,6 +31,12 @@ public record BlobInfo
     public string? ContentType { get; init; }
 
     /// <summary>
+    /// Arbitrary metadata entries associated with this blob.
+    /// Each entry carries a name, content type, and string value.
+    /// </summary>
+    public List<BlobMetadata> Metadata { get; init; } = new();
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="BlobInfo"/> record.
     /// </summary>
     public BlobInfo() { }
@@ -52,4 +58,3 @@ public record BlobInfo
         ContentType = contentType;
     }
 }
-

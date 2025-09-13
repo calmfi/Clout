@@ -107,6 +107,21 @@ app.MapPut("/api/blobs/{id}", async (string id, HttpRequest request, IBlobStorag
     .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
+app.MapPut("/api/blobs/{id}/metadata", async (string id, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        var meta = await request.ReadFromJsonAsync<List<BlobMetadata>>(cancellationToken: ct);
+        if (meta is null) return Results.BadRequest("Invalid or missing JSON body.");
+        var updated = await storage.SetMetadataAsync(id, meta, ct);
+        if (updated is null) return Results.NotFound();
+        var json = JsonSerializer.Serialize(updated, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Results.Content(json, "application/json");
+    })
+    .WithName("SetBlobMetadata")
+    .WithTags("Blobs")
+    .WithDescription("Replace metadata entries for the blob with the provided list.")
+    .WithOpenApi();
+
+// Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapDelete("/api/blobs/{id}", async (string id, IBlobStorage storage, CancellationToken ct) =>
     {
         var deleted = await storage.DeleteAsync(id, ct);

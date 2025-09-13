@@ -56,5 +56,13 @@ public interface IBlobStorage
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Updated metadata, or null if the blob does not exist.</returns>
     Task<BlobInfo?> ReplaceAsync(string id, Stream content, string? contentType, string? originalName, CancellationToken cancellationToken = default);
-}
 
+    /// <summary>
+    /// Sets the metadata list on a blob, replacing any existing entries.
+    /// </summary>
+    /// <param name="id">Blob identifier.</param>
+    /// <param name="metadata">New metadata entries to assign.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Updated metadata result, or null if the blob does not exist.</returns>
+    Task<BlobInfo?> SetMetadataAsync(string id, IReadOnlyList<BlobMetadata> metadata, CancellationToken cancellationToken = default);
+}

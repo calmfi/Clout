@@ -95,4 +95,47 @@ public class BlobsTests : IClassFixture<WebApplicationFactory<Program>>
         var after = await client.GetAsync($"/api/blobs/{info.Id}/info");
         Assert.Equal(HttpStatusCode.NotFound, after.StatusCode);
     }
+
+    [Fact]
+    public async Task Update_Metadata_ReplacesList()
+    {
+        CleanupStorage();
+
+        var client = _factory.CreateClient();
+
+        // upload minimal file
+        var payload = Encoding.UTF8.GetBytes("m");
+        using var form = new MultipartFormDataContent();
+        using var stream = new MemoryStream(payload);
+        var file = new StreamContent(stream);
+        file.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
+        form.Add(file, "file", "meta.txt");
+        var up = await client.PostAsync("/api/blobs", form);
+        Assert.Equal(HttpStatusCode.Created, up.StatusCode);
+        var info = await up.Content.ReadFromJsonAsync<BlobInfo>();
+        Assert.NotNull(info);
+
+        // set metadata
+        var newMeta = new List<BlobMetadata>
+        {
+            new("author", "text/plain", "alice"),
+            new("tags", "application/json", "[\"a\",\"b\"]"),
+        };
+        var put = await client.PutAsJsonAsync($"/api/blobs/{info!.Id}/metadata", newMeta);
+        if (!put.IsSuccessStatusCode)
+        {
+            var body = await put.Content.ReadAsStringAsync();
+            Assert.True(false, $"Failed to set metadata: {put.StatusCode} {body}");
+        }
+        var after = await put.Content.ReadFromJsonAsync<BlobInfo>();
+        Assert.NotNull(after);
+        Assert.Equal(2, after!.Metadata.Count);
+        Assert.Contains(after.Metadata, m => m.Name == "author" && m.Value == "alice" && m.ContentType == "text/plain");
+        Assert.Contains(after.Metadata, m => m.Name == "tags" && m.ContentType == "application/json");
+
+        // verify via info endpoint
+        var meta = await client.GetFromJsonAsync<BlobInfo>($"/api/blobs/{info.Id}/info");
+        Assert.NotNull(meta);
+        Assert.Equal(2, meta!.Metadata.Count);
+    }
 }

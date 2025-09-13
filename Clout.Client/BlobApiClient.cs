@@ -81,5 +81,20 @@ public sealed class BlobApiClient
         response.EnsureSuccessStatusCode();
         return true;
     }
+
+    /// <summary>
+    /// Replaces the metadata list for a blob.
+    /// </summary>
+    /// <param name="id">Blob identifier.</param>
+    /// <param name="metadata">Metadata entries to set (name, content type, value).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Updated <see cref="BlobInfo"/>.</returns>
+    public async Task<BlobInfo> SetMetadataAsync(string id, IEnumerable<Cloud.Shared.BlobMetadata> metadata, CancellationToken cancellationToken = default)
+    {
+        var response = await _http.PutAsJsonAsync($"/api/blobs/{id}/metadata", metadata, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<BlobInfo>(cancellationToken: cancellationToken);
+        return result!;
+    }
 }
 
