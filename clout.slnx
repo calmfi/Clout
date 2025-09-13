@@ -1,6 +1,14 @@
 <Solution>
-  <Project Path="Clout.Client/Clout.Client.csproj" />
-  <Project Path="Clout.Api/Clout.Api.csproj" />
-  <Project Path="Cloud.Shared/Cloud.Shared.csproj" />
-  <Project Path="tests/Clout.Api.IntegrationTests/Clout.Api.IntegrationTests.csproj" />
+  <Folder Name="/API/">
+    <Project Path="Clout.Api/Clout.Api.csproj" />
+  </Folder>
+  <Folder Name="/Applications/">
+    <Project Path="Clout.Client/Clout.Client.csproj" />
+  </Folder>
+  <Folder Name="/Common/">
+    <Project Path="Cloud.Shared/Cloud.Shared.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="tests/Clout.Api.IntegrationTests/Clout.Api.IntegrationTests.csproj" />
+  </Folder>
 </Solution>

@@ -125,7 +125,7 @@ public class BlobsTests : IClassFixture<WebApplicationFactory<Program>>
         if (!put.IsSuccessStatusCode)
         {
             var body = await put.Content.ReadAsStringAsync();
-            Assert.True(false, $"Failed to set metadata: {put.StatusCode} {body}");
+            Assert.Fail($"Failed to set metadata: {put.StatusCode} {body}");
         }
         var after = await put.Content.ReadFromJsonAsync<BlobInfo>();
         Assert.NotNull(after);
