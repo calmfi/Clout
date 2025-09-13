@@ -5,7 +5,7 @@
 - Client: `Clout.Client/` - Console client for the API (upload, list, info, download, delete).
 - Shared: `Cloud.Shared/` - Contracts and abstractions shared across projects (e.g., `BlobInfo`, `IBlobStorage`).
 - Build artifacts: `**/bin/`, `**/obj/` (ignored). IDE cache: `.vs/` (ignored).
-- Solutions: lightweight `clout.slnx` only. Do not use or add `.sln` files.
+- Solutions: lightweight `Clout.slnx` only. Do not use or add `.sln` files.
 
 ## Build, Test, and Development Commands
 - `dotnet restore` — restore NuGet packages.
@@ -49,5 +49,5 @@
 - Storage lives under the API’s `storage/` folder in the runtime output path.
 
 ## Agent-Specific Instructions
-- Respect this file’s scope. Do not add `.sln` files; keep using `clout.slnx` and `dotnet` CLI.
+- Respect this file's scope. Do not add `.sln` files; keep using `Clout.slnx` and `dotnet` CLI.
 - Keep changes minimal, focused, and consistent with existing style. Update docs when behavior changes.
