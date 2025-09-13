@@ -12,5 +12,8 @@
     <ProjectReference Include="..\Cloud.Shared\Cloud.Shared.csproj" />
   </ItemGroup>
 
-</Project>
+  <ItemGroup>
+    <PackageReference Include="NCrontab" Version="3.4.0" />
+  </ItemGroup>
 
+</Project>

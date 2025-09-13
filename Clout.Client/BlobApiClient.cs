@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Cloud.Shared;
+using NCrontab;
 
 namespace Clout.Client;
 
@@ -25,7 +26,7 @@ public sealed class BlobApiClient
     /// </summary>
     public async Task<List<BlobInfo>> ListAsync(CancellationToken cancellationToken = default)
     {
-        var items = await _http.GetFromJsonAsync<List<BlobInfo>>("/api/blobs", cancellationToken);
+        var items = await _http.GetFromJsonAsync("/api/blobs", AppJsonContext.Default.ListBlobInfo, cancellationToken);
         return items ?? new List<BlobInfo>();
     }
 
@@ -35,7 +36,7 @@ public sealed class BlobApiClient
     /// <param name="id">Blob identifier.</param>
     public async Task<BlobInfo?> GetInfoAsync(string id, CancellationToken cancellationToken = default)
     {
-        return await _http.GetFromJsonAsync<BlobInfo>($"/api/blobs/{id}/info", cancellationToken);
+        return await _http.GetFromJsonAsync($"/api/blobs/{id}/info", AppJsonContext.Default.BlobInfo, cancellationToken);
     }
 
     /// <summary>
@@ -91,9 +92,9 @@ public sealed class BlobApiClient
     /// <returns>Updated <see cref="BlobInfo"/>.</returns>
     public async Task<BlobInfo> SetMetadataAsync(string id, IEnumerable<Cloud.Shared.BlobMetadata> metadata, CancellationToken cancellationToken = default)
     {
-        var response = await _http.PutAsJsonAsync($"/api/blobs/{id}/metadata", metadata, cancellationToken);
+        var response = await _http.PutAsJsonAsync($"/api/blobs/{id}/metadata", metadata, AppJsonContext.Default.IEnumerableBlobMetadata, cancellationToken);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<BlobInfo>(cancellationToken: cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
         return result!;
     }
 
@@ -115,7 +116,71 @@ public sealed class BlobApiClient
 
         var response = await _http.PostAsync("/api/functions/register", form, cancellationToken);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<BlobInfo>(cancellationToken: cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        return result!;
+    }
+
+    /// <summary>
+    /// Registers a function and schedules it with an NCRONTAB TimerTrigger in one call.
+    /// </summary>
+    /// <param name="dllPath">Path to the function .dll.</param>
+    /// <param name="name">Function name. Assembly must contain a public method with this name.</param>
+    /// <param name="cron">NCRONTAB expression (5- or 6-field) for TimerTrigger.</param>
+    /// <param name="runtime">Runtime identifier (default: "dotnet").</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The updated BlobInfo after scheduling.</returns>
+    public async Task<BlobInfo> RegisterFunctionWithScheduleAsync(string dllPath, string name, string cron, string runtime = "dotnet", CancellationToken cancellationToken = default)
+    {
+        // Validate cron locally
+        TryParseSchedule(cron, out _);
+
+        var info = await RegisterFunctionAsync(dllPath, name, runtime, cancellationToken);
+        var updated = await SetTimerTriggerAsync(info.Id, cron, cancellationToken);
+        return updated;
+    }
+
+    /// <summary>
+    /// Sets or updates the TimerTrigger NCRONTAB expression on a function blob's metadata.
+    /// Preserves other existing metadata entries.
+    /// </summary>
+    public async Task<BlobInfo> SetTimerTriggerAsync(string id, string cron, CancellationToken cancellationToken = default)
+    {
+        // Validate NCRONTAB locally (support 5- or 6-field expressions)
+        try
+        {
+            TryParseSchedule(cron, out _);
+        }
+        catch (Exception ex) { throw new ArgumentException($"Invalid NCRONTAB expression: {ex.Message}"); }
+
+        var payload = new Dictionary<string, string> { ["expression"] = cron };
+        var response = await _http.PostAsJsonAsync($"/api/functions/{id}/schedule", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        return result!;
+    }
+
+    private static bool TryParseSchedule(string expr, out CrontabSchedule schedule)
+    {
+        try
+        {
+            schedule = CrontabSchedule.Parse(expr, new CrontabSchedule.ParseOptions { IncludingSeconds = true });
+            return true;
+        }
+        catch { }
+        schedule = null!;
+        schedule = CrontabSchedule.Parse(expr, new CrontabSchedule.ParseOptions { IncludingSeconds = false });
+        return true;
+    }
+
+    /// <summary>
+    /// Removes the TimerTrigger metadata entry from the blob, if present.
+    /// Preserves other existing metadata entries.
+    /// </summary>
+    public async Task<BlobInfo> ClearTimerTriggerAsync(string id, CancellationToken cancellationToken = default)
+    {
+        var response = await _http.DeleteAsync($"/api/functions/{id}/schedule", cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
         return result!;
     }
 }

@@ -19,9 +19,13 @@ Clout.slnx
 - Restore/build all: `dotnet build`
 - Run API: `dotnet run --project Clout.Api` (Swagger at `/swagger`)
 - Run client: `dotnet run --project Clout.Client -- <cmd>`
-  - Examples: `list`, `info <id>`, `upload <path>`, `download <id> <dest>`, `delete <id>`,
-    `metadata set <id> <name> <content-type> <value> [...]`,
-    `functions register <dllPath> <name> [runtime=dotnet]`
+  - Blob commands (grouped under `blob`):
+    - `blob list`, `blob info <id>`, `blob upload <path>`, `blob download <id> <dest>`, `blob delete <id>`,
+      `blob metadata set <id> <name> <content-type> <value> [...]`
+  - Function commands:
+    - `functions register <dllPath> <name> [runtime=dotnet] [--cron <expr>]`,
+      `functions schedule <id> <ncrontab>`, `functions unschedule <id>`,
+      `functions cron-next <ncrontab> [count=5]`
 - Test API: `dotnet test tests/Clout.Api.IntegrationTests/Clout.Api.IntegrationTests.csproj`
 
 Tip: Set `CLOUT_API` to point the client at a non-default base URL (default `http://localhost:5000`).
@@ -51,4 +55,65 @@ Client example:
 
 ```
 dotnet run --project Clout.Client -- functions register .\FunctionSamples.dll Echo dotnet
+
+Register and schedule in one command:
+
+```
+dotnet run --project Clout.Client -- functions register .\FunctionSamples.dll Echo dotnet --cron "* * * * *"
+```
+```
+
+Schedule a function (every minute):
+
+```
+dotnet run --project Clout.Client -- functions schedule <blobId> "* * * * *"
+```
+
+Clear schedule:
+
+```
+dotnet run --project Clout.Client -- functions unschedule <blobId>
+```
+
+Preview next run times for a cron expression (UTC):
+
+```
+dotnet run --project Clout.Client -- functions cron-next "* * * * *" 10
+
+Notes:
+- NCRONTAB supports 5-field (minute precision) and 6-field (seconds precision) expressions here. Both forms are accepted by the client and server.
+```
+
+## Blob CLI Examples
+
+- List all blobs
+
+```
+dotnet run --project Clout.Client -- blob list
+```
+
+- Upload a file and show its info
+
+```
+dotnet run --project Clout.Client -- blob upload .\hello.txt
+dotnet run --project Clout.Client -- blob list
+dotnet run --project Clout.Client -- blob info <blobId>
+```
+
+- Download a blob
+
+```
+dotnet run --project Clout.Client -- blob download <blobId> .\out.txt
+```
+
+- Delete a blob
+
+```
+dotnet run --project Clout.Client -- blob delete <blobId>
+```
+
+- Set metadata on a blob
+
+```
+dotnet run --project Clout.Client -- blob metadata set <blobId> author text/plain alice
 ```

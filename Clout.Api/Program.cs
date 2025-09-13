@@ -1,10 +1,13 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi.Any;
 using Cloud.Shared;
 using Clout.Api;
 using System.Reflection;
 using System.Runtime.Loader;
+using Clout.Api.Functions;
+using NCrontab;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,6 +25,7 @@ builder.Services.AddSwaggerGen(c =>
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");
 Directory.CreateDirectory(storageRoot);
 builder.Services.AddSingleton<IBlobStorage>(_ => new FileBlobStorage(storageRoot));
+builder.Services.AddHostedService<FunctionTimerService>();
 
 builder.WebHost.UseUrls("http://localhost:5000");
 var app = builder.Build();
@@ -39,7 +43,26 @@ app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
     .WithName("ListBlobs")
     .WithTags("Blobs")
     .WithDescription("List all blobs with metadata.")
-    .WithOpenApi();
+    .WithOpenApi(op =>
+    {
+        var example = """
+        [
+          {
+            "id": "a1b2c3",
+            "fileName": "hello.txt",
+            "size": 11,
+            "createdUtc": "2025-09-13T21:20:00Z",
+            "contentType": "text/plain",
+            "metadata": []
+          }
+        ]
+        """;
+        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/blobs/{id}", async (string id, IBlobStorage storage, CancellationToken ct) =>
@@ -67,7 +90,26 @@ app.MapGet("/api/blobs/{id}/info", async (string id, IBlobStorage storage, Cance
     .WithName("GetBlobInfo")
     .WithTags("Blobs")
     .WithDescription("Get metadata for a blob.")
-    .WithOpenApi();
+    .WithOpenApi(op =>
+    {
+        var example = """
+        {
+          "id": "a1b2c3",
+          "fileName": "hello.txt",
+          "size": 11,
+          "createdUtc": "2025-09-13T21:20:00Z",
+          "contentType": "text/plain",
+          "metadata": [
+            { "name": "author", "contentType": "text/plain", "value": "alice" }
+          ]
+        }
+        """;
+        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapPost("/api/blobs", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
@@ -212,10 +254,260 @@ app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage 
     .WithName("RegisterFunction")
     .WithTags("Functions")
     .WithDescription("Register a .NET Core function by uploading its entrypoint DLL. Validates the DLL contains a public method matching the function name.")
-    .WithOpenApi();
+    .WithOpenApi(op =>
+    {
+        // 201 Created example payload
+        var example = """
+        {
+          "id": "a1b2c3d4e5f6",
+          "fileName": "MyFunction.dll",
+          "size": 12345,
+          "createdUtc": "2025-09-13T21:20:00Z",
+          "contentType": "application/octet-stream",
+          "metadata": [
+            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
+            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
+            { "name": "function.entrypoint", "contentType": "text/plain", "value": "MyFunction.dll" },
+            { "name": "function.declaringType", "contentType": "text/plain", "value": "SampleFunctions" },
+            { "name": "function.verified", "contentType": "text/plain", "value": "true" }
+          ]
+        }
+        """;
+        if (op.Responses.TryGetValue("201", out var resp) && resp.Content.TryGetValue("application/json", out var media))
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
+
+// Cancellation: see AGENTS.md > "Cancellation & Async"
+app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        try
+        {
+            // Accept JSON: { "expression": "* * * * *" } or { "ncrontab": "..." }
+            var body = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct);
+            var expr = body is not null && (body.TryGetValue("expression", out var e) || body.TryGetValue("ncrontab", out e)) ? e : null;
+            if (string.IsNullOrWhiteSpace(expr))
+                return Results.Text("Missing JSON body with 'expression' (or 'ncrontab') property.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            // Validate cron (support 5- and 6-field)
+            if (!ApiHelpers.TryParseSchedule(expr!, out _))
+                return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            var info = await storage.GetInfoAsync(id, ct);
+            if (info is null) return Results.NotFound();
+            var list = info.Metadata.ToList();
+            list.RemoveAll(m => string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase));
+            list.Add(new BlobMetadata("TimerTrigger", "text/plain", expr!));
+            var updated = await storage.SetMetadataAsync(id, list, ct);
+            if (updated is null) return Results.NotFound();
+            var json = System.Text.Json.JsonSerializer.Serialize(updated, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            return Results.Content(json, "application/json");
+        }
+        catch (Exception ex)
+        {
+            return Results.Text($"Error: {ex.Message}", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+    })
+    .WithName("ScheduleFunction")
+    .WithTags("Functions")
+    .WithDescription("Sets the TimerTrigger NCRONTAB expression on a function blob.")
+    .WithOpenApi(op =>
+    {
+        var example = """
+        {
+          "id": "a1b2c3d4e5f6",
+          "fileName": "MyFunction.dll",
+          "size": 12345,
+          "createdUtc": "2025-09-13T21:20:00Z",
+          "contentType": "application/octet-stream",
+          "metadata": [
+            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
+            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
+            { "name": "TimerTrigger", "contentType": "text/plain", "value": "* * * * *" }
+          ]
+        }
+        """;
+        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
+
+// Cancellation: see AGENTS.md > "Cancellation & Async"
+app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage storage, CancellationToken ct) =>
+    {
+        var info = await storage.GetInfoAsync(id, ct);
+        if (info is null) return Results.NotFound();
+        var list = info.Metadata.ToList();
+        list.RemoveAll(m => string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase));
+        var updated = await storage.SetMetadataAsync(id, list, ct);
+        if (updated is null) return Results.NotFound();
+        var json = System.Text.Json.JsonSerializer.Serialize(updated, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        return Results.Content(json, "application/json");
+    })
+    .WithName("UnscheduleFunction")
+    .WithTags("Functions")
+    .WithDescription("Removes the TimerTrigger NCRONTAB expression from a function blob.")
+    .WithOpenApi(op =>
+    {
+        var example = """
+        {
+          "id": "a1b2c3d4e5f6",
+          "fileName": "MyFunction.dll",
+          "size": 12345,
+          "createdUtc": "2025-09-13T21:20:00Z",
+          "contentType": "application/octet-stream",
+          "metadata": [
+            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
+            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" }
+          ]
+        }
+        """;
+        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
+
+// Cancellation: see AGENTS.md > "Cancellation & Async"
+app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        try
+        {
+            if (!request.HasFormContentType)
+                return Results.Text("Expected multipart/form-data with fields: 'file' (dll), 'name' (function), 'runtime' (dotnet core), and 'cron' (NCRONTAB).", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            var form = await request.ReadFormAsync(ct);
+            var file = form.Files["file"];
+            var name = form["name"].ToString();
+            var runtime = form["runtime"].ToString();
+            var cron = form["cron"].ToString();
+            if (string.IsNullOrWhiteSpace(cron))
+            {
+                // Try alternate keys for convenience
+                cron = form["expression"].ToString();
+                if (string.IsNullOrWhiteSpace(cron)) cron = form["ncrontab"].ToString();
+            }
+
+            if (file is null) return Results.Text("Missing 'file' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            if (string.IsNullOrWhiteSpace(name)) return Results.Text("Missing 'name' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            if (string.IsNullOrWhiteSpace(runtime)) return Results.Text("Missing 'runtime' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            if (string.IsNullOrWhiteSpace(cron)) return Results.Text("Missing 'cron' (or 'expression'/'ncrontab') field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            var rt = runtime.Trim().ToLowerInvariant();
+            var allowed = new[] { "dotnet", ".net", ".net core", "dotnetcore", "netcore", "net" };
+            if (!allowed.Contains(rt))
+            {
+                return Results.Text("Unsupported runtime. Only '.NET Core' is allowed (e.g., 'dotnet' or 'dotnetcore').", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            }
+            if (!file.FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Text("Entrypoint must be a single .dll file.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            }
+            if (!ApiHelpers.TryParseSchedule(cron, out _))
+            {
+                return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            }
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
+            await using (var outStream = File.Create(tempPath))
+            await using (var inStream = file.OpenReadStream())
+            {
+                await inStream.CopyToAsync(outStream, ct);
+            }
+
+            try
+            {
+                var validation = FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType);
+                if (!validation)
+                {
+                    return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+                }
+
+                await using var dllStream = File.OpenRead(tempPath);
+                var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct);
+
+                var metadata = new List<BlobMetadata>
+                {
+                    new("function.name", "text/plain", name),
+                    new("function.runtime", "text/plain", ".net core"),
+                    new("function.entrypoint", "text/plain", file.FileName),
+                    new("function.declaringType", "text/plain", declaringType ?? string.Empty),
+                    new("function.verified", "text/plain", "true"),
+                    new("TimerTrigger", "text/plain", cron)
+                };
+                var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
+                var result = updated ?? info;
+                var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
+            }
+            finally
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            return Results.Text($"Validation error: {ex.Message}", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+    })
+    .WithName("RegisterFunctionScheduled")
+    .WithTags("Functions")
+    .WithDescription("Register a .NET Core function and schedule it with an NCRONTAB TimerTrigger in a single call.")
+    .WithOpenApi(op =>
+    {
+        var example = """
+        {
+          "id": "a1b2c3d4e5f6",
+          "fileName": "MyFunction.dll",
+          "size": 12345,
+          "createdUtc": "2025-09-13T21:20:00Z",
+          "contentType": "application/octet-stream",
+          "metadata": [
+            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
+            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
+            { "name": "function.entrypoint", "contentType": "text/plain", "value": "MyFunction.dll" },
+            { "name": "function.verified", "contentType": "text/plain", "value": "true" },
+            { "name": "TimerTrigger", "contentType": "text/plain", "value": "* * * * *" }
+          ]
+        }
+        """;
+        if (op.Responses.TryGetValue("201", out var resp) && resp.Content.TryGetValue("application/json", out var media))
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
 
 app.Run();
 
 public partial class Program { }
 
 // Types moved to separate files under the Clout.Api namespace.
+
+internal static class ApiHelpers
+{
+    public static bool TryParseSchedule(string expr, out NCrontab.CrontabSchedule schedule)
+    {
+        try
+        {
+            schedule = NCrontab.CrontabSchedule.Parse(expr, new NCrontab.CrontabSchedule.ParseOptions { IncludingSeconds = true });
+            return true;
+        }
+        catch { }
+        try
+        {
+            schedule = NCrontab.CrontabSchedule.Parse(expr, new NCrontab.CrontabSchedule.ParseOptions { IncludingSeconds = false });
+            return true;
+        }
+        catch
+        {
+            schedule = null!;
+            return false;
+        }
+    }
+}
