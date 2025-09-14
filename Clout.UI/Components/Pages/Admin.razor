@@ -1,0 +1,229 @@
+@page "/"
+@using Cloud.Shared
+@inject Services.ICloutApiClient Api
+@inject Services.ApiConfig ApiCfg
+@inject Clout.UI.Services.ToastService Toasts
+
+<h2>Admin</h2>
+
+<h3>Blobs</h3>
+@if (_loadingBlobs)
+{
+    <p>Loading blobs…</p>
+}
+else if (!string.IsNullOrEmpty(_errorBlobs))
+{
+    <p style="color:crimson">@_errorBlobs</p>
+}
+else
+{
+    <table>
+        <thead>
+            <tr>
+                <th>Id</th>
+                <th>Name</th>
+                <th>Size</th>
+                <th>ContentType</th>
+                <th>Created (UTC)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var b in _blobs)
+        {
+            <tr>
+                <td>@b.Id</td>
+                <td>@b.FileName</td>
+                <td>@b.Size</td>
+                <td>@b.ContentType</td>
+                <td>@b.CreatedUtc.UtcDateTime</td>
+                <td>
+                    <a href="@($"{ApiCfg.BaseUrl}/api/blobs/{b.Id}")">Download</a>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+<h3 style="margin-top:24px;">Functions</h3>
+@if (_loadingFunctions)
+{
+    <p>Loading functions…</p>
+}
+else if (!string.IsNullOrEmpty(_errorFunctions))
+{
+    <p style="color:crimson">@_errorFunctions</p>
+}
+else
+{
+    <table>
+        <thead>
+            <tr>
+                <th>Blob Id</th>
+                <th>Entrypoint</th>
+                <th>Name</th>
+                <th>Runtime</th>
+                <th>Schedule</th>
+                <th>Set/Clear</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var f in _functions)
+        {
+            var name = f.Metadata.FirstOrDefault(m => m.Name == "function.name")?.Value;
+            var runtime = f.Metadata.FirstOrDefault(m => m.Name == "function.runtime")?.Value;
+            var entry = f.Metadata.FirstOrDefault(m => m.Name == "function.entrypoint")?.Value;
+            var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value;
+            <tr>
+                <td>@f.Id</td>
+                <td>@entry</td>
+                <td>@name</td>
+                <td>@runtime</td>
+                <td>@schedule</td>
+                <td>
+                    <input @bind="_scheduleInputs[f.Id]" @bind:event="oninput" placeholder="* * * * *" style="width:160px" />
+                    @if (_scheduleErrors.TryGetValue(f.Id, out var err) && !string.IsNullOrWhiteSpace(err))
+                    {
+                        <div style="color:#b42318; font-size:12px;">@err</div>
+                    }
+                    <div style="margin-top:6px;">
+                        <button disabled="@_busy || !IsCronValid(_scheduleInputs.GetValueOrDefault(f.Id))"
+                                title="@(IsCronValid(_scheduleInputs.GetValueOrDefault(f.Id)) ? string.Empty : "Enter 5 or 6-field NCRONTAB")"
+                                @onclick="() => OnSetScheduleAsync(f.Id)">Set</button>
+                        <button disabled="@_busy || string.IsNullOrEmpty(schedule)" @onclick="() => OnClearScheduleAsync(f.Id)">Clear</button>
+                    </div>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<BlobInfo> _blobs = new();
+    private List<BlobInfo> _functions = new();
+    private bool _loadingBlobs;
+    private bool _loadingFunctions;
+    private string? _errorBlobs;
+    private string? _errorFunctions;
+    private readonly Dictionary<string, string> _scheduleInputs = new();
+    private readonly Dictionary<string, string> _scheduleErrors = new();
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Load blobs and functions in parallel
+        _loadingBlobs = true;
+        _loadingFunctions = true;
+        var ct = default(CancellationToken);
+        try
+        {
+            var blobsTask = Api.GetBlobsAsync(ct);
+            var funcsTask = Api.GetFunctionsAsync(ct);
+            await Task.WhenAll(blobsTask, funcsTask);
+            _blobs = blobsTask.Result.ToList();
+            _functions = funcsTask.Result.ToList();
+            foreach (var f in _functions)
+            {
+                var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value ?? string.Empty;
+                _scheduleInputs[f.Id] = schedule;
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorBlobs = ex.Message;
+            _errorFunctions = ex.Message;
+        }
+        finally
+        {
+            _loadingBlobs = false;
+            _loadingFunctions = false;
+        }
+    }
+
+    private async Task OnSetScheduleAsync(string id)
+    {
+        if (!_scheduleInputs.TryGetValue(id, out var expr) || string.IsNullOrWhiteSpace(expr))
+            return;
+
+        if (!IsCronValid(expr, out var error))
+        {
+            _scheduleErrors[id] = error ?? "Invalid expression";
+            Toasts.Show(_scheduleErrors[id], Services.ToastLevel.Error);
+            return;
+        }
+        _scheduleErrors.Remove(id);
+        _busy = true;
+        try
+        {
+            await Api.SetFunctionScheduleAsync(id, expr);
+            await RefreshFunctionsAsync();
+            Toasts.Show("Schedule updated", Services.ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _errorFunctions = ex.Message;
+            Toasts.Show(ex.Message, Services.ToastLevel.Error, 5000);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OnClearScheduleAsync(string id)
+    {
+        _busy = true;
+        try
+        {
+            await Api.ClearFunctionScheduleAsync(id);
+            await RefreshFunctionsAsync();
+            Toasts.Show("Schedule cleared", Services.ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _errorFunctions = ex.Message;
+            Toasts.Show(ex.Message, Services.ToastLevel.Error, 5000);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RefreshFunctionsAsync()
+    {
+        var list = await Api.GetFunctionsAsync();
+        _functions = list.ToList();
+        foreach (var f in _functions)
+        {
+            var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value ?? string.Empty;
+            _scheduleInputs[f.Id] = schedule;
+        }
+        StateHasChanged();
+    }
+
+    private static bool IsCronValid(string? expr) => IsCronValid(expr, out _);
+
+    private static bool IsCronValid(string? expr, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(expr)) { error = "Empty expression"; return false; }
+        var parts = expr.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length is not (5 or 6)) { error = "Use 5 or 6 fields"; return false; }
+        foreach (var p in parts)
+        {
+            if (string.IsNullOrWhiteSpace(p)) { error = "Empty field"; return false; }
+            foreach (var ch in p)
+            {
+                if (!(char.IsDigit(ch) || ch is '*' or '/' or '-' or ',' or '?'))
+                {
+                    error = $"Invalid char '{ch}'";
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+}

@@ -1,14 +1,14 @@
 @inherits LayoutComponentBase
-@using Microsoft.FluentUI.AspNetCore.Components
 
-<FluentProvider>
-    <div style="padding:16px; max-width:960px; margin:0 auto;">
-        <header style="margin-bottom:16px;">
-            <h1 style="margin:0; font-size:20px;">Clout UI</h1>
-        </header>
-        <section>
-            @Body
-        </section>
-    </div>
-</FluentProvider>
-
+<div style="padding:16px; max-width:960px; margin:0 auto;">
+    <header style="margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;">
+        <h1 style="margin:0; font-size:20px;">Clout</h1>
+        <nav>
+            <a href="/">Home</a>
+        </nav>
+    </header>
+    <section>
+        @Body
+    </section>
+</div>
+<Toasts />

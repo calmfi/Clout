@@ -1,0 +1,39 @@
+@inject Clout.UI.Services.ToastService ToastSvc
+
+<div style="position:fixed; right:16px; bottom:16px; z-index:9999; display:flex; flex-direction:column; gap:8px;">
+    @foreach (var m in _messages)
+    {
+        var bg = m.Level switch
+        {
+            Services.ToastLevel.Success => "#1a7f37",
+            Services.ToastLevel.Warning => "#9a6700",
+            Services.ToastLevel.Error => "#b42318",
+            _ => "#2f81f7"
+        };
+        <div style="min-width:240px; max-width:420px; color:white; background:@bg; padding:10px 12px; border-radius:6px; box-shadow: 0 6px 20px rgba(0,0,0,0.2);">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+                <div>@m.Text</div>
+                <button style="background:transparent; color:white; border:none; cursor:pointer;" @onclick="() => Close(m.Id)">✕</button>
+            </div>
+        </div>
+    }
+    
+</div>
+
+@code {
+    private IReadOnlyList<Services.ToastMessage> _messages = Array.Empty<Services.ToastMessage>();
+
+    protected override void OnInitialized()
+    {
+        ToastSvc.OnChange += HandleChanged;
+        _messages = ToastSvc.Messages;
+    }
+
+    private void HandleChanged()
+    {
+        _messages = ToastSvc.Messages;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Close(string id) => ToastSvc.Dismiss(id);
+}
