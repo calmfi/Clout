@@ -36,6 +36,10 @@
             <a href="@($"{Config.ApiBase}/api/blobs/{r.Id}")">Download</a>
             <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => DeleteAsync(r.Id))">Delete</FluentButton>
             <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => ShowMetadataAsync(r.Id))">Metadata</FluentButton>
+            @if (!string.IsNullOrWhiteSpace(r.FileName) && r.FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                <a href="/functions?from=@r.Id">Register Functions</a>
+            }
         </ChildContent>
     </TemplateColumn>
 </FluentDataGrid>

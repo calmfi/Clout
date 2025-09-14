@@ -127,7 +127,7 @@ public sealed class BlobApiClient
     /// <summary>
     /// Registers multiple functions from the same .NET entrypoint DLL.
     /// </summary>
-    public async Task<List<BlobInfo>> RegisterFunctionsAsync(string dllPath, IEnumerable<string> names, string runtime = "dotnet", CancellationToken cancellationToken = default)
+    public async Task<List<BlobInfo>> RegisterFunctionsAsync(string dllPath, IEnumerable<string> names, string runtime = "dotnet", string? cron = null, CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
         await using var fs = File.OpenRead(dllPath);
@@ -136,6 +136,7 @@ public sealed class BlobApiClient
         form.Add(file, "file", Path.GetFileName(dllPath));
         form.Add(new StringContent(string.Join(",", names ?? Array.Empty<string>())), "names");
         form.Add(new StringContent(runtime), "runtime");
+        if (!string.IsNullOrWhiteSpace(cron)) form.Add(new StringContent(cron), "cron");
 
         var response = await _http.PostAsync("/api/functions/register-many", form, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -146,7 +147,7 @@ public sealed class BlobApiClient
     /// <summary>
     /// Registers multiple functions from a provided stream containing the .NET assembly.
     /// </summary>
-    public async Task<List<BlobInfo>> RegisterFunctionsAsync(Stream dllStream, string fileName, IEnumerable<string> names, string runtime = "dotnet", CancellationToken cancellationToken = default)
+    public async Task<List<BlobInfo>> RegisterFunctionsAsync(Stream dllStream, string fileName, IEnumerable<string> names, string runtime = "dotnet", string? cron = null, CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
         var file = new StreamContent(dllStream);
@@ -154,11 +155,47 @@ public sealed class BlobApiClient
         form.Add(file, "file", fileName);
         form.Add(new StringContent(string.Join(",", names ?? Array.Empty<string>())), "names");
         form.Add(new StringContent(runtime), "runtime");
+        if (!string.IsNullOrWhiteSpace(cron)) form.Add(new StringContent(cron), "cron");
 
         var response = await _http.PostAsync("/api/functions/register-many", form, cancellationToken);
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken);
         return result ?? new List<BlobInfo>();
+    }
+
+    /// <summary>
+    /// Registers a function by referencing an existing DLL blob id.
+    /// </summary>
+    public async Task<BlobInfo> RegisterFunctionFromExistingAsync(string dllBlobId, string name, string runtime = "dotnet", CancellationToken cancellationToken = default)
+    {
+        var payload = new Dictionary<string, string>
+        {
+            ["name"] = name,
+            ["runtime"] = runtime,
+        };
+        var response = await _http.PostAsJsonAsync($"/api/functions/register-from/{dllBlobId}", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        return result!;
+    }
+
+    /// <summary>
+    /// Registers multiple functions by referencing an existing DLL blob id.
+    /// </summary>
+    public async Task<List<BlobInfo>> RegisterFunctionsFromExistingAsync(string dllBlobId, IEnumerable<string> names, string runtime = "dotnet", string? cron = null, CancellationToken cancellationToken = default)
+    {
+        var payload = new RegisterMany { Names = names?.ToArray() ?? Array.Empty<string>(), Runtime = runtime, Cron = cron };
+        var response = await _http.PostAsJsonAsync($"/api/functions/register-many-from/{dllBlobId}", payload, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        return result ?? new List<BlobInfo>();
+    }
+
+    private sealed class RegisterMany
+    {
+        public string[] Names { get; set; } = Array.Empty<string>();
+        public string? Runtime { get; set; } = "dotnet";
+        public string? Cron { get; set; }
     }
 
     /// <summary>
@@ -233,5 +270,35 @@ public sealed class BlobApiClient
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
         return result!;
+    }
+
+    /// <summary>
+    /// Gets next occurrences for a cron expression from the server.
+    /// </summary>
+    public async Task<List<string>> CronNextAsync(string expr, int count = 5, CancellationToken cancellationToken = default)
+    {
+        var url = $"/api/functions/cron-next?expr={Uri.EscapeDataString(expr)}&count={count}";
+        var response = await _http.GetAsync(url, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var list = await response.Content.ReadFromJsonAsync<List<string>>(cancellationToken: cancellationToken);
+        return list ?? new List<string>();
+    }
+
+    public async Task<int> ScheduleAllAsync(string sourceId, string cron, CancellationToken cancellationToken = default)
+    {
+        var payload = new Dictionary<string, string> { ["sourceId"] = sourceId, ["cron"] = cron };
+        var response = await _http.PostAsJsonAsync("/api/functions/schedule-all", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var dict = await response.Content.ReadFromJsonAsync<Dictionary<string, int>>(cancellationToken: cancellationToken);
+        return dict != null && dict.TryGetValue("count", out var c) ? c : 0;
+    }
+
+    public async Task<int> UnscheduleAllAsync(string sourceId, CancellationToken cancellationToken = default)
+    {
+        var payload = new Dictionary<string, string> { ["sourceId"] = sourceId };
+        var response = await _http.PostAsJsonAsync("/api/functions/unschedule-all", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var dict = await response.Content.ReadFromJsonAsync<Dictionary<string, int>>(cancellationToken: cancellationToken);
+        return dict != null && dict.TryGetValue("count", out var c) ? c : 0;
     }
 }

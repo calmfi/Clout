@@ -32,15 +32,28 @@
     <PropertyColumn Property="@(r => r.DeclaringType)" Title="Declaring Type" />
     <PropertyColumn Property="@(r => r.Verified)" Title="Verified" />
     <PropertyColumn Property="@(r => r.TimerTrigger)" Title="TimerTrigger" />
+    <TemplateColumn Title="Source DLL">
+        <ChildContent Context="r">
+            @if (!string.IsNullOrWhiteSpace(r.SourceId))
+            {
+                <a href="@($"{Config.ApiBase}/api/blobs/{r.SourceId}")">@r.SourceId</a>
+            }
+        </ChildContent>
+    </TemplateColumn>
     <PropertyColumn Property="@(r => r.CreatedDisplay)" Title="Created (UTC)" />
     <PropertyColumn Property="@(r => r.Id)" Title="Blob Id" />
     <TemplateColumn Title="Actions">
         <ChildContent Context="r">
-            <a href="@($"{Config.ApiBase}/api/blobs/{r.Id}")">Download</a>
+            <a href="@($"{Config.ApiBase}/api/blobs/{(string.IsNullOrWhiteSpace(r.SourceId) ? r.Id : r.SourceId)}")">Download</a>
             <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => OpenScheduleDialog(r))">@(string.IsNullOrEmpty(r.TimerTrigger) ? "Schedule" : "Reschedule")</FluentButton>
             @if (!string.IsNullOrEmpty(r.TimerTrigger))
             {
                 <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => UnscheduleAsync(r))">Unschedule</FluentButton>
+            }
+            @if (!string.IsNullOrWhiteSpace(r.SourceId))
+            {
+                <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => OpenRescheduleAllDialog(r.SourceId!, r.Name))">Reschedule All</FluentButton>
+                <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => UnscheduleAllAsync(r.SourceId!))">Unschedule All</FluentButton>
             }
             <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => DeleteAsync(r.Id))">Delete</FluentButton>
         </ChildContent>
@@ -73,6 +86,28 @@
     </div>
 }
 
+@if (_reAllOpen)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;"
+         @onclick="CloseRescheduleAllDialog" tabindex="0" autofocus @onkeydown="HandleRescheduleAllKeyDown">
+        <fluent-dialog aria-label="Reschedule all" style="max-width:min(95vw, 700px); width:min(95vw, 700px);" @onclick:stopPropagation>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h2 style="margin:0; font-size:1.1rem;">Reschedule All for DLL @_reAllSourceId</h2>
+                <FluentButton Appearance="Appearance.Stealth" OnClick="CloseRescheduleAllDialog">Close</FluentButton>
+            </div>
+            <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+                <label for="cron3" style="min-width:7ch;">Cron</label>
+                <FluentTextField Id="cron3" Placeholder="* * * * * or with seconds" Style="flex:1" @bind-Value="_reAllCron" />
+                <FluentButton Appearance="Appearance.Accent" OnClick="SaveRescheduleAllAsync">Save</FluentButton>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_reAllError))
+            {
+                <div style="margin-top:8px;color:var(--neutral-foreground-rest);">Error: @_reAllError</div>
+            }
+        </fluent-dialog>
+    </div>
+}
+
 @if (_regOpen)
 {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;"
@@ -84,12 +119,80 @@
                 <FluentButton Appearance="Appearance.Stealth" OnClick="CloseRegisterManyDialog">Close</FluentButton>
             </div>
             <div style="margin-top:8px; display:grid; grid-template-columns: 120px 1fr; gap:10px; align-items:center;">
-                <div>DLL File</div>
-                <InputFile OnChange="OnDllSelected" />
+                <div>DLL Source</div>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <InputFile OnChange="OnDllSelected" />
+                    <span>or existing Blob Id:</span>
+                    <FluentTextField Style="width:320px" @bind-Value="_regExistingId" />
+                </div>
                 <div>Names</div>
                 <div>
                     <textarea style="width:100%; min-height:120px;" @bind="_regNames" placeholder="One per line or comma-separated"></textarea>
+                    <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="SyncRowsFromNames">Sync rows from names</FluentButton>
+                        <FluentSwitch @bind-Checked="_perRow">Per-function cron</FluentSwitch>
+                    </div>
                 </div>
+                @if (_perRow)
+                {
+                    <div>Per-function schedule</div>
+                    <div>
+                        <FluentDataGrid TGridItem="Functions.FuncRow" Items="@_rows.AsQueryable()" RowsPerPage="10" GridHeight="40vh" Density="Density.Compact">
+                            <PropertyColumn Property="@(r => r.Name)" Title="Name" />
+                            <TemplateColumn Title="Cron">
+                                <ChildContent Context="r">
+                                    <div style="display:flex; gap:8px; align-items:center;">
+                                        <FluentTextField Style="flex:1" @bind-Value="r.Cron" />
+                                        @if (string.IsNullOrWhiteSpace(r.Cron))
+                                        {
+                                            <span style="color:var(--neutral-foreground-rest); font-size:.85em;">optional</span>
+                                        }
+                                        else if (BlobApiClient.IsValidCron(r.Cron))
+                                        {
+                                            <span style="color:#0b6; font-size:.85em;">valid</span>
+                                        }
+                                        else
+                                        {
+                                            <span style="color:#c33; font-size:.85em;">invalid</span>
+                                        }
+                                    </div>
+                                </ChildContent>
+                            </TemplateColumn>
+                            <TemplateColumn Title="">
+                                <ChildContent Context="r"><FluentButton Appearance="Appearance.Stealth" OnClick="@(() => RemoveFuncRow(r))">Remove</FluentButton></ChildContent>
+                            </TemplateColumn>
+                        </FluentDataGrid>
+                        <div style="margin-top:6px;"><FluentButton Appearance="Appearance.Stealth" OnClick="AddFuncRow">Add Row</FluentButton></div>
+                    </div>
+                }
+                else
+                {
+                    <div>Cron (optional)</div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <FluentTextField @bind-Value="_regCron" @oninput="(e => ComputeCronPreview())" Placeholder="e.g. */5 * * * *" Style="flex:1" />
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="ComputeCronPreview">Preview</FluentButton>
+                    </div>
+                    @if (_cronPreview.Count > 0)
+                    {
+                        <div></div>
+                        <div style="font-size:.9em; color:var(--neutral-foreground-rest);">
+                            Next runs:
+                            <ul style="margin:6px 0 0 18px;">
+                                @foreach (var t in _cronPreview) { <li>@t</li> }
+                            </ul>
+                        </div>
+                    }
+                }
+                @if (_cronPreview.Count > 0)
+                {
+                    <div></div>
+                    <div style="font-size:.9em; color:var(--neutral-foreground-rest);">
+                        Next runs:
+                        <ul style="margin:6px 0 0 18px;">
+                            @foreach (var t in _cronPreview) { <li>@t</li> }
+                        </ul>
+                    </div>
+                }
                 <div>Runtime</div>
                 <FluentTextField @bind-Value="_regRuntime" />
                 <div></div>
@@ -123,9 +226,20 @@
     [Inject] private BlobApiClient Api { get; set; } = default!;
     [Inject] private AppConfig Config { get; set; } = default!;
 
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
     protected override async Task OnInitializedAsync()
     {
         await LoadAsync();
+        // Pre-fill register-many dialog if query contains from=<id>
+        var uri = new Uri(Nav.Uri);
+        var qs = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var from = qs["from"];
+        if (!string.IsNullOrWhiteSpace(from))
+        {
+            _regExistingId = from!;
+            OpenRegisterManyDialog();
+        }
     }
 
     private async Task LoadAsync()
@@ -166,7 +280,8 @@
         Entrypoint = Meta(b, "function.entrypoint"),
         DeclaringType = Meta(b, "function.declaringType"),
         Verified = Meta(b, "function.verified"),
-        TimerTrigger = Meta(b, "TimerTrigger")
+        TimerTrigger = Meta(b, "TimerTrigger"),
+        SourceId = Meta(b, "function.sourceId")
     };
 
     private static string Meta(BlobInfo b, string key) =>
@@ -213,6 +328,7 @@
         public string DeclaringType { get; set; } = string.Empty;
         public string Verified { get; set; } = string.Empty;
         public string TimerTrigger { get; set; } = string.Empty;
+        public string? SourceId { get; set; }
     }
 
     private async Task UnscheduleAsync(FunctionRow r)
@@ -328,9 +444,20 @@
     // Register many dialog state and actions
     private bool _regOpen;
     private IBrowserFile? _regFile;
+    private string _regExistingId = string.Empty;
     private string _regNames = string.Empty;
     private string _regRuntime = "dotnet";
+    private string _regCron = string.Empty;
+    private readonly List<string> _cronPreview = new();
+    private bool _perRow;
+    private readonly List<FuncRow> _rows = new();
     private string? _regError;
+
+    // Reschedule all dialog
+    private bool _reAllOpen;
+    private string _reAllSourceId = string.Empty;
+    private string _reAllCron = string.Empty;
+    private string? _reAllError;
 
     private void OpenRegisterManyDialog()
     {
@@ -353,19 +480,125 @@
         _regFile = e.File;
     }
 
+    private async void ComputeCronPreview()
+    {
+        _cronPreview.Clear();
+        var expr = _regCron?.Trim();
+        if (string.IsNullOrWhiteSpace(expr)) { StateHasChanged(); return; }
+        try { _cronPreview.AddRange(await Api.CronNextAsync(expr, 5)); } catch { }
+        StateHasChanged();
+    }
+
+    private void SyncRowsFromNames()
+    {
+        var set = new HashSet<string>(_rows.Select(r => r.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var n in (_regNames ?? string.Empty).Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (set.Contains(n)) continue;
+            _rows.Add(new FuncRow { Name = n, Cron = string.Empty });
+        }
+        StateHasChanged();
+    }
+
+    private void AddFuncRow() { _rows.Add(new FuncRow()); StateHasChanged(); }
+    private void RemoveFuncRow(FuncRow row) { _rows.Remove(row); StateHasChanged(); }
+
+    private sealed class FuncRow
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Cron { get; set; }
+    }
+
+    private void OpenRescheduleAllDialog(string sourceId, string anyName)
+    {
+        _reAllSourceId = sourceId;
+        _reAllCron = string.Empty;
+        _reAllError = null;
+        _reAllOpen = true;
+    }
+
+    private void CloseRescheduleAllDialog() => _reAllOpen = false;
+
+    private async Task SaveRescheduleAllAsync()
+    {
+        try
+        {
+            _reAllError = null;
+            if (string.IsNullOrWhiteSpace(_reAllCron)) { _reAllError = "Cron expression is required."; return; }
+            if (!BlobApiClient.IsValidCron(_reAllCron)) { _reAllError = "Invalid NCRONTAB expression."; return; }
+            var count = await Api.ScheduleAllAsync(_reAllSourceId, _reAllCron);
+            foreach (var f in _functions.Where(f => string.Equals(f.SourceId, _reAllSourceId, StringComparison.OrdinalIgnoreCase)))
+            {
+                f.TimerTrigger = _reAllCron;
+            }
+            ApplyFilter();
+            _reAllOpen = false;
+            ShowToast($"Rescheduled {count} functions.");
+        }
+        catch (Exception ex)
+        {
+            _reAllError = ex.Message;
+        }
+    }
+
+    private async Task UnscheduleAllAsync(string sourceId)
+    {
+        try
+        {
+            if (!await Confirm($"Unschedule all functions from DLL {sourceId}?")) return;
+            var count = await Api.UnscheduleAllAsync(sourceId);
+            foreach (var f in _functions.Where(f => string.Equals(f.SourceId, sourceId, StringComparison.OrdinalIgnoreCase)))
+            {
+                f.TimerTrigger = string.Empty;
+            }
+            ApplyFilter();
+            ShowToast($"Unscheduled {count} functions.");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
     private async Task SaveRegisterManyAsync()
     {
         try
         {
             _regError = null;
-            if (_regFile is null) { _regError = "Select a DLL file."; return; }
+            if (_regFile is null && string.IsNullOrWhiteSpace(_regExistingId)) { _regError = "Select a DLL file or provide an existing Blob Id."; return; }
             var names = (_regNames ?? string.Empty)
-                .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Split(new[] { ",", ";", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            if (names.Length == 0) { _regError = "Provide at least one function name."; return; }
-            await using var stream = _regFile.OpenReadStream(50 * 1024 * 1024); // 50 MB limit
-            var result = await Api.RegisterFunctionsAsync(stream, _regFile.Name, names, _regRuntime);
+            if (!_perRow && !string.IsNullOrWhiteSpace(_regCron) && !BlobApiClient.IsValidCron(_regCron)) { _regError = "Invalid NCRONTAB expression."; return; }
+            if (_perRow)
+            {
+                foreach (var r in _rows)
+                    if (!string.IsNullOrWhiteSpace(r.Cron) && !BlobApiClient.IsValidCron(r.Cron)) { _regError = $"Invalid cron for '{r.Name}'."; return; }
+            }
+            if (names.Length == 0 && _rows.Count == 0) { _regError = "Provide at least one function name."; return; }
+            if (names.Length == 0) { names = _rows.Select(r => r.Name).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); }
+            List<BlobInfo> result;
+            if (!string.IsNullOrWhiteSpace(_regExistingId))
+            {
+                result = await Api.RegisterFunctionsFromExistingAsync(_regExistingId!, names, _regRuntime, _perRow ? null : _regCron);
+            }
+            else
+            {
+                await using var stream = _regFile.OpenReadStream(50 * 1024 * 1024); // 50 MB limit
+                result = await Api.RegisterFunctionsAsync(stream, _regFile.Name, names, _regRuntime, _perRow ? null : _regCron);
+            }
+            if (_perRow && result.Count == names.Length)
+            {
+                var map = _rows.Where(r => !string.IsNullOrWhiteSpace(r.Cron)).ToDictionary(r => r.Name, r => r.Cron!, StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < result.Count; i++)
+                {
+                    if (map.TryGetValue(names[i], out var c))
+                    {
+                        try { await Api.SetTimerTriggerAsync(result[i].Id, c); } catch { }
+                    }
+                }
+            }
             _regOpen = false;
             ShowToast($"Registered {result.Count} functions.");
             await LoadAsync();
@@ -381,4 +614,14 @@
         if (string.Equals(e.Key, "Escape", StringComparison.OrdinalIgnoreCase))
             CloseScheduleDialog();
     }
+
+    private void HandleRescheduleAllKeyDown(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Escape", StringComparison.OrdinalIgnoreCase))
+            CloseRescheduleAllDialog();
+    }
 }
+
+
+
+

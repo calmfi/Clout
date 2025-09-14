@@ -60,6 +60,129 @@ app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
         return op;
     });
 
+// Register a function from an existing DLL blob id
+app.MapPost("/api/functions/register-from/{dllId}", async (string dllId, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        try
+        {
+            var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct) ?? new();
+            payload.TryGetValue("name", out var name);
+            payload.TryGetValue("runtime", out var runtime);
+            if (string.IsNullOrWhiteSpace(name)) return Results.Text("Missing 'name'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            runtime = string.IsNullOrWhiteSpace(runtime) ? "dotnet" : runtime;
+
+            await using var source = await storage.OpenReadAsync(dllId, ct);
+            if (source is null) return Results.NotFound();
+            var info = await storage.GetInfoAsync(dllId, ct);
+            var fileName = info?.FileName ?? $"{dllId}.dll";
+            var contentType = info?.ContentType ?? "application/octet-stream";
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
+            await using (var outStream = File.Create(tempPath))
+            {
+                await source.CopyToAsync(outStream, ct);
+            }
+            try
+            {
+                if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
+                    return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+                await using var dllStream = File.OpenRead(tempPath);
+                var saved = await storage.SaveAsync(fileName, dllStream, contentType, ct);
+                var metadata = new List<BlobMetadata>
+                {
+                    new("function.name", "text/plain", name),
+                    new("function.runtime", "text/plain", ".net core"),
+                    new("function.entrypoint", "text/plain", fileName),
+                    new("function.declaringType", "text/plain", declaringType ?? string.Empty),
+                    new("function.verified", "text/plain", "true")
+                };
+                var updated = await storage.SetMetadataAsync(saved.Id, metadata, ct);
+                var result = updated ?? saved;
+                var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
+            }
+            finally
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            return Results.Text($"Validation error: {ex.Message}", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+    })
+    .WithName("RegisterFunctionFromExisting")
+    .WithTags("Functions")
+    .WithDescription("Register a function by referencing an existing DLL blob id and function name.")
+    .WithOpenApi();
+
+// Register multiple functions from an existing DLL blob id
+app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        try
+        {
+            var payload = await request.ReadFromJsonAsync<RegisterManyRequest>(cancellationToken: ct);
+            if (payload is null || payload.Names is null || payload.Names.Length == 0)
+                return Results.Text("Missing 'names'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            var runtime = string.IsNullOrWhiteSpace(payload.Runtime) ? "dotnet" : payload.Runtime;
+
+            await using var source = await storage.OpenReadAsync(dllId, ct);
+            if (source is null) return Results.NotFound();
+            var info = await storage.GetInfoAsync(dllId, ct);
+            var fileName = info?.FileName ?? $"{dllId}.dll";
+            var contentType = info?.ContentType ?? "application/octet-stream";
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
+            await using (var outStream = File.Create(tempPath))
+            {
+                await source.CopyToAsync(outStream, ct);
+            }
+            try
+            {
+                var results = new List<BlobInfo>();
+                foreach (var name in payload.Names.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
+                        return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+                    // Dedup: create a lightweight function entry without copying dll content
+                    await using var empty = new MemoryStream(Array.Empty<byte>());
+                    var saved = await storage.SaveAsync(fileName, empty, contentType, ct);
+                    var metadata = new List<BlobMetadata>
+                    {
+                        new("function.name", "text/plain", name),
+                        new("function.runtime", "text/plain", ".net core"),
+                        new("function.entrypoint", "text/plain", fileName),
+                        new("function.declaringType", "text/plain", declaringType ?? string.Empty),
+                        new("function.verified", "text/plain", "true"),
+                        new("function.sourceId", "text/plain", dllId)
+                    };
+                    if (!string.IsNullOrWhiteSpace(payload.Cron))
+                    {
+                        if (!ApiHelpers.TryParseSchedule(payload.Cron, out _))
+                            return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+                        metadata.Add(new BlobMetadata("TimerTrigger", "text/plain", payload.Cron));
+                    }
+                    var updated = await storage.SetMetadataAsync(saved.Id, metadata, ct);
+                    results.Add(updated ?? saved);
+                    ct.ThrowIfCancellationRequested();
+                }
+                var json = System.Text.Json.JsonSerializer.Serialize(results, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
+            }
+            finally { try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { } }
+        }
+        catch (Exception ex)
+        {
+            return Results.Text($"Validation error: {ex.Message}", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+    })
+    .WithName("RegisterFunctionsFromExisting")
+    .WithTags("Functions")
+    .WithDescription("Register multiple functions by referencing an existing DLL blob id and providing names.")
+    .WithOpenApi();
+
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
     {
@@ -72,6 +195,7 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
             var file = form.Files["file"];
             var namesRaw = form["names"].ToString();
             var runtime = form["runtime"].ToString();
+            var cron = form["cron"].ToString();
 
             if (file is null) return Results.Text("Missing 'file' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
             if (string.IsNullOrWhiteSpace(namesRaw)) return Results.Text("Missing 'names' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
@@ -95,6 +219,14 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
                 .ToArray();
             if (names.Length == 0)
                 return Results.Text("No function names provided in 'names'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            bool addCron = false;
+            if (!string.IsNullOrWhiteSpace(cron))
+            {
+                if (!ApiHelpers.TryParseSchedule(cron, out _))
+                    return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+                addCron = true;
+            }
 
             var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
             await using (var outStream = File.Create(tempPath))
@@ -123,6 +255,7 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
                         new("function.declaringType", "text/plain", declaringType ?? string.Empty),
                         new("function.verified", "text/plain", "true")
                     };
+                    if (addCron) metadata.Add(new BlobMetadata("TimerTrigger", "text/plain", cron));
                     var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
                     results.Add(updated ?? info);
                     ct.ThrowIfCancellationRequested();
@@ -149,11 +282,14 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/blobs/{id}", async (string id, IBlobStorage storage, CancellationToken ct) =>
     {
-        var stream = await storage.OpenReadAsync(id, ct);
-        if (stream is null) return Results.NotFound();
         var info = await storage.GetInfoAsync(id, ct);
-        var fileName = info?.FileName ?? $"{id}.bin";
-        var contentType = info?.ContentType ?? "application/octet-stream";
+        var sourceId = info?.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase))?.Value;
+        var readId = string.IsNullOrWhiteSpace(sourceId) ? id : sourceId;
+        var stream = await storage.OpenReadAsync(readId, ct);
+        if (stream is null) return Results.NotFound();
+        var serveInfo = string.IsNullOrWhiteSpace(sourceId) ? info : await storage.GetInfoAsync(readId, ct);
+        var fileName = serveInfo?.FileName ?? $"{readId}.bin";
+        var contentType = serveInfo?.ContentType ?? "application/octet-stream";
         return Results.File(stream, contentType, fileName);
     })
     .WithName("DownloadBlob")
@@ -565,31 +701,89 @@ app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBl
         return op;
     });
 
+// Cron preview endpoint
+app.MapGet("/api/functions/cron-next", (string expr, int? count) =>
+    {
+        if (!ApiHelpers.TryParseSchedule(expr, out var schedule))
+        {
+            return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+        var n = Math.Clamp(count.GetValueOrDefault(5), 1, 50);
+        var list = new List<string>(n);
+        var now = DateTime.UtcNow;
+        var next = now;
+        for (int i = 0; i < n; i++)
+        {
+            next = schedule.GetNextOccurrence(next);
+            list.Add(next.ToString("u") + " UTC");
+        }
+        return Results.Json(list);
+    })
+    .WithName("CronNext")
+    .WithTags("Functions")
+    .WithDescription("Returns the next N occurrences for a valid NCRONTAB expression starting from now (UTC).")
+    .WithOpenApi();
+
+// Bulk schedule all functions referencing a given source DLL id
+app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct) ?? new();
+        if (!payload.TryGetValue("sourceId", out var sourceId) || string.IsNullOrWhiteSpace(sourceId))
+            return Results.Text("Missing 'sourceId'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        if (!payload.TryGetValue("cron", out var cron) || string.IsNullOrWhiteSpace(cron))
+            return Results.Text("Missing 'cron'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        if (!ApiHelpers.TryParseSchedule(cron, out _))
+            return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+        var all = await storage.ListAsync(ct);
+        var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
+        var count = 0;
+        foreach (var f in funcs)
+        {
+            var meta = f.Metadata ?? new List<BlobMetadata>();
+            // remove existing TimerTrigger
+            meta = meta.Where(m => !string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase)).ToList();
+            meta.Add(new BlobMetadata("TimerTrigger", "text/plain", cron));
+            await storage.SetMetadataAsync(f.Id, meta, ct);
+            count++;
+            ct.ThrowIfCancellationRequested();
+        }
+        return Results.Json(new { count });
+    })
+    .WithName("ScheduleAllFromSource")
+    .WithTags("Functions")
+    .WithDescription("Set the TimerTrigger cron on all functions that reference the given source DLL id.")
+    .WithOpenApi();
+
+// Bulk unschedule all functions referencing a given source DLL id
+app.MapPost("/api/functions/unschedule-all", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct) ?? new();
+        if (!payload.TryGetValue("sourceId", out var sourceId) || string.IsNullOrWhiteSpace(sourceId))
+            return Results.Text("Missing 'sourceId'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        var all = await storage.ListAsync(ct);
+        var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
+        var count = 0;
+        foreach (var f in funcs)
+        {
+            var meta = f.Metadata ?? new List<BlobMetadata>();
+            meta = meta.Where(m => !string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase)).ToList();
+            await storage.SetMetadataAsync(f.Id, meta, ct);
+            count++;
+            ct.ThrowIfCancellationRequested();
+        }
+        return Results.Json(new { count });
+    })
+    .WithName("UnscheduleAllFromSource")
+    .WithTags("Functions")
+    .WithDescription("Remove the TimerTrigger cron on all functions that reference the given source DLL id.")
+    .WithOpenApi();
+
 app.Run();
 
 public partial class Program { }
 
 // Types moved to separate files under the Clout.Api namespace.
 
-internal static class ApiHelpers
-{
-    public static bool TryParseSchedule(string expr, out NCrontab.CrontabSchedule schedule)
-    {
-        try
-        {
-            schedule = NCrontab.CrontabSchedule.Parse(expr, new NCrontab.CrontabSchedule.ParseOptions { IncludingSeconds = true });
-            return true;
-        }
-        catch { }
-        try
-        {
-            schedule = NCrontab.CrontabSchedule.Parse(expr, new NCrontab.CrontabSchedule.ParseOptions { IncludingSeconds = false });
-            return true;
-        }
-        catch
-        {
-            schedule = null!;
-            return false;
-        }
-    }
-}
+
+internal sealed record RegisterManyRequest(string[] Names, string? Runtime, string? Cron);
