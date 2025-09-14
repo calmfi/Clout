@@ -1,19 +1,20 @@
-<HeadContent>
-    <link rel="stylesheet" href="css/site.css" />
-    <link rel="stylesheet" href="_content/Microsoft.FluentUI.AspNetCore.Components/css/reboot.css" />
-    <script src="_content/Microsoft.FluentUI.AspNetCore.Components/js/loading-theme.js"></script>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script src="_content/Microsoft.FluentUI.AspNetCore.Components/Microsoft.FluentUI.AspNetCore.Components.lib.module.js" type="module"></script>
-    <title>Clout UI</title>
-</HeadContent>
+﻿<!DOCTYPE html>
+<html lang="en">
 
-<Router AppAssembly="@typeof(App).Assembly">
-    <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.AppMainLayout)" />
-    </Found>
-    <NotFound>
-        <LayoutView Layout="@typeof(Layout.AppMainLayout)">
-            <p>Sorry, there's nothing at this address.</p>
-        </LayoutView>
-    </NotFound>
-</Router>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["Clout.UI.styles.css"]" />
+    <ImportMap />
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+    <HeadOutlet />
+</head>
+
+<body>
+    <Routes />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+
+</html>

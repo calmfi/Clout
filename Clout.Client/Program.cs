@@ -168,6 +168,28 @@ internal class Program
                                     Console.WriteLine(JsonSerializer.Serialize(result, AppJsonContext.Default.BlobInfo));
                                     return 0;
                                 }
+                            case "register-many":
+                                {
+                                    if (args.Length < 4) return Fail("Usage: functions register-many <dllPath> <name1> [<name2> ...] [--runtime <r>]");
+                                    var dllPath = args[2];
+                                    var names = new List<string>();
+                                    string runtime = "dotnet";
+                                    for (int i = 3; i < args.Length; i++)
+                                    {
+                                        var tok = args[i];
+                                        if (string.Equals(tok, "--runtime", StringComparison.OrdinalIgnoreCase) || string.Equals(tok, "-r", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            if (i + 1 >= args.Length) return Fail("Missing value after --runtime");
+                                            runtime = args[++i];
+                                            continue;
+                                        }
+                                        names.Add(tok);
+                                    }
+                                    if (names.Count == 0) return Fail("Provide at least one function name.");
+                                    var result = await client.RegisterFunctionsAsync(dllPath, names, runtime, ct);
+                                    Console.WriteLine(JsonSerializer.Serialize(result, AppJsonContext.Default.ListBlobInfo));
+                                    return 0;
+                                }
                             case "schedule":
                                 {
                                     if (args.Length < 4) return Fail("Usage: functions schedule <id> <ncrontab>");
@@ -187,7 +209,7 @@ internal class Program
                                     return 0;
                                 }
                             default:
-                                return Fail("Supported: functions register|schedule|unschedule");
+                                return Fail("Supported: functions register|register-many|schedule|unschedule");
                         }
                     }
                 case "metadata": // legacy: prefer 'blob metadata'
@@ -293,6 +315,7 @@ internal class Program
         Console.WriteLine("  clout blob delete <id>");
         Console.WriteLine("  clout blob metadata set <id> <name> <content-type> <value> [<name> <content-type> <value> ...]");
         Console.WriteLine("  clout functions register <dllPath> <name> [runtime=dotnet] [--cron <expr>]");
+        Console.WriteLine("  clout functions register-many <dllPath> <name1> [<name2> ...] [--runtime <r>]");
         Console.WriteLine("  clout functions schedule <id> <ncrontab>");
         Console.WriteLine("  clout functions unschedule <id>");
         Console.WriteLine("  clout functions cron-next <ncrontab> [count=5]");
@@ -302,4 +325,3 @@ internal class Program
 }
 
 // Types moved to separate files.
-

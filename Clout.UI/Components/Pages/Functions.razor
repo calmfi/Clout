@@ -1,72 +1,145 @@
 @page "/functions"
-@using Cloud.Shared
-@inject Services.ICloutApiClient Api
-@inject Services.ApiConfig ApiCfg
-@inject Clout.UI.Services.ToastService Toasts
+@rendermode InteractiveServer
 
-<h2 class="text-2xl font-semibold mb-4 text-white">Functions</h2>
+<h1>Registered Functions</h1>
 
-@if (_loading)
+<FluentStack Orientation="Orientation.Horizontal" Spacing="8" AlignItems="Alignment.Center">
+    <FluentButton Appearance="Appearance.Accent" OnClick="LoadAsync">
+        <FluentIcon Value="@(new Icons.Regular.Size20.ArrowClockwise())" /> Refresh
+    </FluentButton>
+    <FluentButton Appearance="Appearance.Accent" OnClick="OpenRegisterManyDialog">Register Many</FluentButton>
+    @if (_loading)
+    {
+        <FluentProgressRing />
+    }
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <span style="color:var(--neutral-foreground-rest)">Error: @_error</span>
+    }
+    <span>@(_functions.Count) items</span>
+    <FluentSearch OnSearch="OnSearch" Placeholder="Filter by function or id" />
+    @if (!string.IsNullOrWhiteSpace(_query))
+    {
+        <FluentButton Appearance="Appearance.Stealth" OnClick="ClearFilter">Clear Filter</FluentButton>
+    }
+    <FluentDivider />
+</FluentStack>
+
+<FluentDataGrid TGridItem="FunctionRow" Items="@_view.AsQueryable()" RowsPerPage="20" GridHeight="600px" Density="Density.Compact">
+    <PropertyColumn Property="@(r => r.Name)" Title="Name" Sortable="true" />
+    <PropertyColumn Property="@(r => r.Runtime)" Title="Runtime" />
+    <PropertyColumn Property="@(r => r.Entrypoint)" Title="Entrypoint" />
+    <PropertyColumn Property="@(r => r.DeclaringType)" Title="Declaring Type" />
+    <PropertyColumn Property="@(r => r.Verified)" Title="Verified" />
+    <PropertyColumn Property="@(r => r.TimerTrigger)" Title="TimerTrigger" />
+    <PropertyColumn Property="@(r => r.CreatedDisplay)" Title="Created (UTC)" />
+    <PropertyColumn Property="@(r => r.Id)" Title="Blob Id" />
+    <TemplateColumn Title="Actions">
+        <ChildContent Context="r">
+            <a href="@($"{Config.ApiBase}/api/blobs/{r.Id}")">Download</a>
+            <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => OpenScheduleDialog(r))">@(string.IsNullOrEmpty(r.TimerTrigger) ? "Schedule" : "Reschedule")</FluentButton>
+            @if (!string.IsNullOrEmpty(r.TimerTrigger))
+            {
+                <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => UnscheduleAsync(r))">Unschedule</FluentButton>
+            }
+            <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => DeleteAsync(r.Id))">Delete</FluentButton>
+        </ChildContent>
+    </TemplateColumn>
+</FluentDataGrid>
+
+@if (_schedOpen)
 {
-    <p class="text-gray-400">Loading functions…</p>
-}
-else if (!string.IsNullOrEmpty(_error))
-{
-    <p class="text-red-400">@_error</p>
-}
-else
-{
-    <FluentDataGrid TGridItem="BlobInfo" Items="@_functions.AsQueryable()" GridTemplateColumns="2fr 1fr 1fr 1fr 2fr">
-        <PropertyColumn Title="Blob Id" Property="(BlobInfo f) => f.Id" />
-        <TemplateColumn Title="Entrypoint">
-            @context.Metadata.FirstOrDefault(m => m.Name == "function.entrypoint")?.Value
-        </TemplateColumn>
-        <TemplateColumn Title="Name">
-            @context.Metadata.FirstOrDefault(m => m.Name == "function.name")?.Value
-        </TemplateColumn>
-        <TemplateColumn Title="Runtime">
-            @context.Metadata.FirstOrDefault(m => m.Name == "function.runtime")?.Value
-        </TemplateColumn>
-        <TemplateColumn Title="Schedule">
-            @context.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value
-            <div class="mt-2 space-x-2">
-                <input class="border border-gray-600 bg-transparent rounded px-2 py-1 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-brand"
-                       @bind="_scheduleInputs[context.Id]" @bind:event="oninput" placeholder="* * * * *" />
-                @if (_scheduleErrors.TryGetValue(context.Id, out var err) && !string.IsNullOrWhiteSpace(err))
-                {
-                    <div class="text-red-400 text-xs mt-1">@err</div>
-                }
-                <button class="px-3 py-1 rounded bg-brand text-white hover:bg-brand-700 disabled:opacity-50"
-                        disabled="@_busy || !IsCronValid(_scheduleInputs.GetValueOrDefault(context.Id))"
-                        title="@(IsCronValid(_scheduleInputs.GetValueOrDefault(context.Id)) ? string.Empty : "Enter 5 or 6-field NCRONTAB")"
-                        @onclick="() => OnSetScheduleAsync(context.Id)">Set</button>
-                <button class="px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-600 disabled:opacity-50"
-                        disabled="@_busy || string.IsNullOrEmpty(context.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value)"
-                        @onclick="() => OnClearScheduleAsync(context.Id)">Clear</button>
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;"
+         @onclick="CloseScheduleDialog" tabindex="0" autofocus @onkeydown="HandleScheduleKeyDown">
+        <fluent-dialog aria-label="Schedule function" style="max-width:min(95vw, 700px); width:min(95vw, 700px);"
+                       @onclick:stopPropagation>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h2 style="margin:0; font-size:1.1rem;">Schedule: @_schedName (@_schedId)</h2>
+                <FluentButton Appearance="Appearance.Stealth" OnClick="CloseScheduleDialog">Close</FluentButton>
             </div>
-        </TemplateColumn>
-    </FluentDataGrid>
+            <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+                <label for="cron" style="min-width:7ch;">Cron</label>
+                <FluentTextField Id="cron" Placeholder="* * * * * or with seconds" Style="flex:1" @bind-Value="_schedCron" />
+                <FluentButton Appearance="Appearance.Accent" OnClick="SaveScheduleAsync">Save</FluentButton>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_schedError))
+            {
+                <div style="margin-top:8px;color:var(--neutral-foreground-rest);">Error: @_schedError</div>
+            }
+            <div style="margin-top:8px; color:var(--neutral-foreground-rest); font-size:.9em;">
+                Supports 5-field or 6-field NCRONTAB expressions. Example with seconds: <code>0 */5 * * * *</code>
+            </div>
+        </fluent-dialog>
+    </div>
+}
+
+@if (_regOpen)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;"
+         @onclick="CloseRegisterManyDialog" tabindex="0" autofocus @onkeydown="HandleRegisterKeyDown">
+        <fluent-dialog aria-label="Register functions" style="max-width:min(95vw, 900px); width:min(95vw, 900px);"
+                       @onclick:stopPropagation>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h2 style="margin:0; font-size:1.1rem;">Register Multiple Functions</h2>
+                <FluentButton Appearance="Appearance.Stealth" OnClick="CloseRegisterManyDialog">Close</FluentButton>
+            </div>
+            <div style="margin-top:8px; display:grid; grid-template-columns: 120px 1fr; gap:10px; align-items:center;">
+                <div>DLL File</div>
+                <InputFile OnChange="OnDllSelected" />
+                <div>Names</div>
+                <div>
+                    <textarea style="width:100%; min-height:120px;" @bind="_regNames" placeholder="One per line or comma-separated"></textarea>
+                </div>
+                <div>Runtime</div>
+                <FluentTextField @bind-Value="_regRuntime" />
+                <div></div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <FluentButton Appearance="Appearance.Accent" OnClick="SaveRegisterManyAsync">Register</FluentButton>
+                    <FluentButton Appearance="Appearance.Stealth" OnClick="CloseRegisterManyDialog">Cancel</FluentButton>
+                </div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_regError))
+            {
+                <div style="margin-top:8px;color:var(--neutral-foreground-rest);">Error: @_regError</div>
+            }
+        </fluent-dialog>
+    </div>
+}
+
+@if (_toastVisible)
+{
+    <div style="position:fixed; right:16px; bottom:16px; z-index:1100; background:var(--accent-fill-rest); color:var(--foreground-on-accent-rest); padding:10px 14px; border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.24);">
+        @_toastMessage
+    </div>
 }
 
 @code {
-    private List<BlobInfo> _functions = new();
+    private readonly List<FunctionRow> _functions = new();
+    private List<FunctionRow> _view = new();
     private bool _loading;
     private string? _error;
-    private readonly Dictionary<string, string> _scheduleInputs = new();
-    private readonly Dictionary<string, string> _scheduleErrors = new();
-    private bool _busy;
+    private string _query = string.Empty;
+
+    [Inject] private BlobApiClient Api { get; set; } = default!;
+    [Inject] private AppConfig Config { get; set; } = default!;
 
     protected override async Task OnInitializedAsync()
     {
-        _loading = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
         try
         {
-            _functions = (await Api.GetFunctionsAsync()).ToList();
-            foreach (var f in _functions)
-            {
-                var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value ?? string.Empty;
-                _scheduleInputs[f.Id] = schedule;
-            }
+            _loading = true;
+            _error = null;
+            _functions.Clear();
+            var items = await Api.ListAsync();
+            _functions.AddRange(items.Where(IsFunction)
+                .Select(ToRow)
+                .OrderByDescending(r => r.CreatedUtc));
+            ApplyFilter();
         }
         catch (Exception ex)
         {
@@ -78,88 +151,234 @@ else
         }
     }
 
-    private async Task OnSetScheduleAsync(string id)
+    private static bool IsFunction(BlobInfo b)
     {
-        if (!_scheduleInputs.TryGetValue(id, out var expr) || string.IsNullOrWhiteSpace(expr))
-            return;
-
-        if (!IsCronValid(expr, out var error))
-        {
-            _scheduleErrors[id] = error ?? "Invalid expression";
-            Toasts.Show(_scheduleErrors[id], Services.ToastLevel.Error);
-            return;
-        }
-        _scheduleErrors.Remove(id);
-        _busy = true;
-        try
-        {
-            await Api.SetFunctionScheduleAsync(id, expr);
-            await RefreshAsync();
-            Toasts.Show("Schedule updated", Services.ToastLevel.Success);
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Show(ex.Message, Services.ToastLevel.Error, 5000);
-        }
-        finally
-        {
-            _busy = false;
-        }
+        return b.Metadata?.Any(m => m.Name == "function.name" || m.Name == "function.runtime") == true;
     }
 
-    private async Task OnClearScheduleAsync(string id)
+    private static FunctionRow ToRow(BlobInfo b) => new()
     {
-        _busy = true;
-        try
-        {
-            await Api.ClearFunctionScheduleAsync(id);
-            await RefreshAsync();
-            Toasts.Show("Schedule cleared", Services.ToastLevel.Success);
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            Toasts.Show(ex.Message, Services.ToastLevel.Error, 5000);
-        }
-        finally
-        {
-            _busy = false;
-        }
+        Id = b.Id,
+        CreatedUtc = b.CreatedUtc,
+        CreatedDisplay = b.CreatedUtc.ToString("u"),
+        Name = Meta(b, "function.name"),
+        Runtime = Meta(b, "function.runtime"),
+        Entrypoint = Meta(b, "function.entrypoint"),
+        DeclaringType = Meta(b, "function.declaringType"),
+        Verified = Meta(b, "function.verified"),
+        TimerTrigger = Meta(b, "TimerTrigger")
+    };
+
+    private static string Meta(BlobInfo b, string key) =>
+        b.Metadata?.FirstOrDefault(m => string.Equals(m.Name, key, StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
+
+    private Task OnSearch(string text)
+    {
+        _query = text ?? string.Empty;
+        ApplyFilter();
+        return Task.CompletedTask;
     }
 
-    private async Task RefreshAsync()
+    private void ClearFilter()
     {
-        var list = await Api.GetFunctionsAsync();
-        _functions = list.ToList();
-        foreach (var f in _functions)
+        _query = string.Empty;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var q = _query.Trim();
+        if (string.IsNullOrEmpty(q))
         {
-            var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value ?? string.Empty;
-            _scheduleInputs[f.Id] = schedule;
+            _view = _functions.ToList();
+        }
+        else
+        {
+            _view = _functions.Where(r =>
+                (r.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (r.Id?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+                .ToList();
         }
         StateHasChanged();
     }
 
-    private static bool IsCronValid(string? expr) => IsCronValid(expr, out _);
-
-    private static bool IsCronValid(string? expr, out string? error)
+    private sealed class FunctionRow
     {
-        error = null;
-        if (string.IsNullOrWhiteSpace(expr)) { error = "Empty expression"; return false; }
-        var parts = expr.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length is not (5 or 6)) { error = "Use 5 or 6 fields"; return false; }
-        foreach (var p in parts)
+        public string Id { get; set; } = string.Empty;
+        public DateTimeOffset CreatedUtc { get; set; }
+        public string CreatedDisplay { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Runtime { get; set; } = string.Empty;
+        public string Entrypoint { get; set; } = string.Empty;
+        public string DeclaringType { get; set; } = string.Empty;
+        public string Verified { get; set; } = string.Empty;
+        public string TimerTrigger { get; set; } = string.Empty;
+    }
+
+    private async Task UnscheduleAsync(FunctionRow r)
+    {
+        try
         {
-            if (string.IsNullOrWhiteSpace(p)) { error = "Empty field"; return false; }
-            foreach (var ch in p)
+            if (!await Confirm($"Unschedule TimerTrigger for {r.Name} ({r.Id})?")) return;
+            var updated = await Api.ClearTimerTriggerAsync(r.Id);
+            r.TimerTrigger = string.Empty;
+            StateHasChanged();
+            ShowToast("Function unscheduled.");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task DeleteAsync(string id)
+    {
+        try
+        {
+            if (!await Confirm($"Unregister function (delete blob) {id}?")) return;
+            if (await Api.DeleteAsync(id))
             {
-                if (!(char.IsDigit(ch) || ch is '*' or '/' or '-' or ',' or '?'))
-                {
-                    error = $"Invalid char '{ch}'";
-                    return false;
-                }
+                var idx = _functions.FindIndex(b => b.Id == id);
+                if (idx >= 0) _functions.RemoveAt(idx);
+                ApplyFilter();
+                ShowToast("Function unregistered.");
             }
         }
-        return true;
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+    private async Task<bool> Confirm(string message)
+    {
+        try { return await JS.InvokeAsync<bool>("confirm", message); }
+        catch { return true; }
+    }
+
+    // Toast notifications
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private void ShowToast(string message)
+    {
+        _toastMessage = message;
+        _toastVisible = true;
+        _ = HideToastAfterDelay();
+    }
+    private async Task HideToastAfterDelay()
+    {
+        await Task.Delay(2500);
+        _toastVisible = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // Schedule dialog state and actions
+    private bool _schedOpen;
+    private string _schedId = string.Empty;
+    private string _schedName = string.Empty;
+    private string _schedCron = string.Empty;
+    private string? _schedError;
+
+    private void OpenScheduleDialog(FunctionRow r)
+    {
+        _schedId = r.Id;
+        _schedName = r.Name;
+        _schedCron = string.IsNullOrWhiteSpace(r.TimerTrigger) ? string.Empty : r.TimerTrigger;
+        _schedError = null;
+        _schedOpen = true;
+    }
+
+    private void CloseScheduleDialog()
+    {
+        _schedOpen = false;
+    }
+
+    private async Task SaveScheduleAsync()
+    {
+        try
+        {
+            _schedError = null;
+            if (string.IsNullOrWhiteSpace(_schedCron))
+            {
+                _schedError = "Cron expression is required.";
+                return;
+            }
+            if (!BlobApiClient.IsValidCron(_schedCron))
+            {
+                _schedError = "Invalid NCRONTAB expression.";
+                return;
+            }
+            var updated = await Api.SetTimerTriggerAsync(_schedId, _schedCron);
+            var row = _functions.FirstOrDefault(f => f.Id == _schedId);
+            if (row is not null)
+            {
+                row.TimerTrigger = _schedCron;
+                ApplyFilter();
+            }
+            _schedOpen = false;
+            ShowToast("Function scheduled.");
+        }
+        catch (Exception ex)
+        {
+            _schedError = ex.Message;
+        }
+    }
+
+    // Register many dialog state and actions
+    private bool _regOpen;
+    private IBrowserFile? _regFile;
+    private string _regNames = string.Empty;
+    private string _regRuntime = "dotnet";
+    private string? _regError;
+
+    private void OpenRegisterManyDialog()
+    {
+        _regOpen = true;
+        _regFile = null;
+        _regNames = string.Empty;
+        _regRuntime = "dotnet";
+        _regError = null;
+    }
+
+    private void CloseRegisterManyDialog() => _regOpen = false;
+
+    private void HandleRegisterKeyDown(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Escape", StringComparison.OrdinalIgnoreCase)) _regOpen = false;
+    }
+
+    private void OnDllSelected(InputFileChangeEventArgs e)
+    {
+        _regFile = e.File;
+    }
+
+    private async Task SaveRegisterManyAsync()
+    {
+        try
+        {
+            _regError = null;
+            if (_regFile is null) { _regError = "Select a DLL file."; return; }
+            var names = (_regNames ?? string.Empty)
+                .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (names.Length == 0) { _regError = "Provide at least one function name."; return; }
+            await using var stream = _regFile.OpenReadStream(50 * 1024 * 1024); // 50 MB limit
+            var result = await Api.RegisterFunctionsAsync(stream, _regFile.Name, names, _regRuntime);
+            _regOpen = false;
+            ShowToast($"Registered {result.Count} functions.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _regError = ex.Message;
+        }
+    }
+
+    private void HandleScheduleKeyDown(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Escape", StringComparison.OrdinalIgnoreCase))
+            CloseScheduleDialog();
     }
 }

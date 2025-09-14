@@ -4,7 +4,7 @@
   </Folder>
   <Folder Name="/Applications/">
     <Project Path="Clout.Client/Clout.Client.csproj" />
-    <Project Path="Clout.UI/Clout.UI.csproj" />
+    <Project Path="Clout.UI/Clout.UI.csproj" Id="9029138c-9c47-4d92-9915-e572c205f4c5" />
   </Folder>
   <Folder Name="/Common/">
     <Project Path="Cloud.Shared/Cloud.Shared.csproj" />

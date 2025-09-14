@@ -19,5 +19,5 @@ $env:CLOUT_API = $Api
 Write-Host "Registering and scheduling (*/10 * * * * *)..." -ForegroundColor Cyan
 dotnet run --project ./Clout.Client -- functions register $dll Ping dotnet --cron "*/10 * * * * *"
 
-Write-Host "Done. The function should run roughly every 10 seconds." -ForegroundColor Green
+Write-Host "Done. The functions should run roughly every 10 seconds." -ForegroundColor Green
 

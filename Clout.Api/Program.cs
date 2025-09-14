@@ -61,6 +61,92 @@ app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
     });
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
+app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+    {
+        try
+        {
+            if (!request.HasFormContentType)
+                return Results.Text("Expected multipart/form-data with fields: 'file' (dll), 'names' (comma-separated), 'runtime' (dotnet core).", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            var form = await request.ReadFormAsync(ct);
+            var file = form.Files["file"];
+            var namesRaw = form["names"].ToString();
+            var runtime = form["runtime"].ToString();
+
+            if (file is null) return Results.Text("Missing 'file' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            if (string.IsNullOrWhiteSpace(namesRaw)) return Results.Text("Missing 'names' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            if (string.IsNullOrWhiteSpace(runtime)) return Results.Text("Missing 'runtime' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            var rt = runtime.Trim().ToLowerInvariant();
+            var allowed = new[] { "dotnet", ".net", ".net core", "dotnetcore", "netcore", "net" };
+            if (!allowed.Contains(rt))
+            {
+                return Results.Text("Unsupported runtime. Only '.NET Core' is allowed (e.g., 'dotnet' or 'dotnetcore').", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            }
+
+            if (!file.FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Text("Entrypoint must be a single .dll file.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            }
+
+            var names = namesRaw
+                .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (names.Length == 0)
+                return Results.Text("No function names provided in 'names'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
+            await using (var outStream = File.Create(tempPath))
+            await using (var inStream = file.OpenReadStream())
+            {
+                await inStream.CopyToAsync(outStream, ct);
+            }
+
+            try
+            {
+                var results = new List<BlobInfo>();
+                foreach (var name in names)
+                {
+                    if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
+                    {
+                        return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+                    }
+
+                    await using var dllStream = File.OpenRead(tempPath);
+                    var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct);
+                    var metadata = new List<BlobMetadata>
+                    {
+                        new("function.name", "text/plain", name),
+                        new("function.runtime", "text/plain", ".net core"),
+                        new("function.entrypoint", "text/plain", file.FileName),
+                        new("function.declaringType", "text/plain", declaringType ?? string.Empty),
+                        new("function.verified", "text/plain", "true")
+                    };
+                    var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
+                    results.Add(updated ?? info);
+                    ct.ThrowIfCancellationRequested();
+                }
+
+                var json = System.Text.Json.JsonSerializer.Serialize(results, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
+            }
+            finally
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            return Results.Text($"Validation error: {ex.Message}", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+    })
+    .WithName("RegisterFunctionsMany")
+    .WithTags("Functions")
+    .WithDescription("Register multiple functions from one .dll by providing a comma- or newline-separated list of method names in 'names'.")
+    .WithOpenApi();
+
+// Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/blobs/{id}", async (string id, IBlobStorage storage, CancellationToken ct) =>
     {
         var stream = await storage.OpenReadAsync(id, ct);

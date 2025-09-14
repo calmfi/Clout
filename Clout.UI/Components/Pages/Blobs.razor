@@ -1,46 +1,137 @@
-@page "/"
 @page "/blobs"
-@using Cloud.Shared
-@inject Services.ICloutApiClient Api
-@inject Services.ApiConfig ApiCfg
+@rendermode InteractiveServer
 
-<h2 class="text-2xl font-semibold mb-4 text-white">Blobs</h2>
+<h1>Blobs</h1>
 
-@if (_loading)
+<FluentStack Orientation="Orientation.Horizontal" Spacing="8" AlignItems="Alignment.Center">
+    <FluentButton Appearance="Appearance.Accent" OnClick="LoadAsync">
+        <FluentIcon Value="@(new Icons.Regular.Size20.ArrowClockwise())" /> Refresh
+    </FluentButton>
+    @if (_loading)
+    {
+        <FluentProgressRing />
+    }
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <span style="color:var(--neutral-foreground-rest)">Error: @_error</span>
+    }
+    <span>@(_blobs.Count) items</span>
+    <FluentSearch OnSearch="OnSearch" Placeholder="Filter by file name or id" />
+    @if (!string.IsNullOrWhiteSpace(_query))
+    {
+        <FluentButton Appearance="Appearance.Stealth" OnClick="ClearFilter">Clear Filter</FluentButton>
+    }
+    <FluentDivider />
+</FluentStack>
+
+<FluentDataGrid TGridItem="BlobRow" Items="@_view.AsQueryable()" RowsPerPage="20" GridHeight="600px" Density="Density.Compact">
+    <PropertyColumn Property="@(r => r.FileName)" Title="File Name" Sortable="true" />
+    <PropertyColumn Property="@(r => r.SizeDisplay)" Title="Size" />
+    <PropertyColumn Property="@(r => r.ContentType)" Title="Content Type" />
+    <PropertyColumn Property="@(r => r.CreatedDisplay)" Title="Created (UTC)" />
+    <PropertyColumn Property="@(r => r.MetadataCount)" Title="Metadata" />
+    <PropertyColumn Property="@(r => r.Id)" Title="Id" Sortable="true" />
+    <TemplateColumn Title="Actions">
+        <ChildContent Context="r">
+            <a href="@($"{Config.ApiBase}/api/blobs/{r.Id}")">Download</a>
+            <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => DeleteAsync(r.Id))">Delete</FluentButton>
+            <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => ShowMetadataAsync(r.Id))">Metadata</FluentButton>
+        </ChildContent>
+    </TemplateColumn>
+</FluentDataGrid>
+
+@if (_toastVisible)
 {
-    <p class="text-gray-400">Loading blobs…</p>
+    <div style="position:fixed; right:16px; bottom:16px; z-index:1100; background:var(--accent-fill-rest); color:var(--foreground-on-accent-rest); padding:10px 14px; border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.24);">
+        @_toastMessage
+    </div>
 }
-else if (!string.IsNullOrEmpty(_error))
+
+@if (_metaOpen)
 {
-    <p class="text-red-400">@_error</p>
-}
-else
-{
-    <FluentDataGrid TGridItem="BlobInfo" Items="@_blobs.AsQueryable()" GridTemplateColumns="2fr 2fr 1fr 1fr 2fr 1fr">
-        <PropertyColumn Title="Id" Property="(BlobInfo b) => b.Id" />
-        <PropertyColumn Title="Name" Property="(BlobInfo b) => b.FileName" />
-        <PropertyColumn Title="Size" Property="(BlobInfo b) => b.Size" />
-        <PropertyColumn Title="ContentType" Property="(BlobInfo b) => b.ContentType" />
-        <TemplateColumn Title="Created (UTC)">
-            @context.CreatedUtc.UtcDateTime
-        </TemplateColumn>
-        <TemplateColumn Title="Actions">
-            <a class="text-brand hover:text-brand-700" href="@($"{ApiCfg.BaseUrl}/api/blobs/@context.Id")">Download</a>
-        </TemplateColumn>
-    </FluentDataGrid>
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;"
+         @onclick="CloseMetadata" tabindex="0" autofocus @onkeydown="HandleKeyDown">
+        <fluent-dialog aria-label="Blob metadata" style="max-width:min(95vw, 1000px); width:min(95vw, 1000px);"
+                       @onclick:stopPropagation>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h2 style="margin:0; font-size:1.1rem;">@_metaTitle</h2>
+                <div style="display:flex; gap:8px;">
+                    @if (!_metaEdit)
+                    {
+                        <FluentButton Appearance="Appearance.Accent" OnClick="BeginEdit">Edit</FluentButton>
+                    }
+                    else
+                    {
+                        <FluentButton Appearance="Appearance.Accent" OnClick="AddMetaRow">Add Row</FluentButton>
+                        <FluentButton Appearance="Appearance.Accent" OnClick="SaveEditAsync">Save</FluentButton>
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="CancelEdit">Cancel</FluentButton>
+                    }
+                    <FluentButton Appearance="Appearance.Stealth" OnClick="CloseMetadata">Close</FluentButton>
+                </div>
+            </div>
+            <div style="margin-top:8px">
+                @if (!_metaEdit)
+                {
+                    <FluentDataGrid TGridItem="BlobMetadata" Items="@_meta.AsQueryable()" RowsPerPage="10" GridHeight="60vh" Density="Density.Compact">
+                        <PropertyColumn Property="@(m => m.Name)" Title="Name" Sortable="true" />
+                        <PropertyColumn Property="@(m => m.ContentType)" Title="Content Type" />
+                        <PropertyColumn Property="@(m => m.Value)" Title="Value" />
+                        <TemplateColumn Title="Copy">
+                            <ChildContent Context="m">
+                                <FluentButton Appearance="Appearance.Stealth" Title="Copy value" OnClick="@(() => CopyToClipboard(m.Value))">Copy</FluentButton>
+                            </ChildContent>
+                        </TemplateColumn>
+                    </FluentDataGrid>
+                }
+                else
+                {
+                    <FluentDataGrid TGridItem="EditMetaRow" Items="@_metaEditList.AsQueryable()" RowsPerPage="10" GridHeight="60vh" Density="Density.Compact">
+                        <PropertyColumn Property="@(m => m.Name)" Title="Name" />
+                        <PropertyColumn Property="@(m => m.ContentType)" Title="Content Type" />
+                        <TemplateColumn Title="Value">
+                            <ChildContent Context="m">
+                                <FluentTextField Style="width:100%" @bind-Value="m.Value" />
+                            </ChildContent>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Remove">
+                            <ChildContent Context="m">
+                                <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => RemoveMetaRow(m))" Title="Remove row">Remove</FluentButton>
+                            </ChildContent>
+                        </TemplateColumn>
+                    </FluentDataGrid>
+                }
+            </div>
+        </fluent-dialog>
+    </div>
 }
 
 @code {
-    private List<BlobInfo> _blobs = new();
+    private readonly List<BlobRow> _blobs = new();
+    private List<BlobRow> _view = new();
     private bool _loading;
     private string? _error;
+    private string _query = string.Empty;
+
+    [Inject] private BlobApiClient Api { get; set; } = default!;
+    [Inject] private AppConfig Config { get; set; } = default!;
 
     protected override async Task OnInitializedAsync()
     {
-        _loading = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
         try
         {
-            _blobs = (await Api.GetBlobsAsync()).ToList();
+            _loading = true;
+            _error = null;
+            _blobs.Clear();
+            var items = await Api.ListAsync();
+            _blobs.AddRange(items
+                .OrderByDescending(b => b.CreatedUtc)
+                .Select(ToRow));
+            ApplyFilter();
         }
         catch (Exception ex)
         {
@@ -50,5 +141,201 @@ else
         {
             _loading = false;
         }
+    }
+
+    private Task OnSearch(string text)
+    {
+        _query = text ?? string.Empty;
+        ApplyFilter();
+        return Task.CompletedTask;
+    }
+
+    private void ClearFilter()
+    {
+        _query = string.Empty;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var q = _query.Trim();
+        _view = string.IsNullOrEmpty(q)
+            ? _blobs.ToList()
+            : _blobs.Where(r =>
+                (r.FileName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (r.Id?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+                .ToList();
+        StateHasChanged();
+    }
+
+    private async Task DeleteAsync(string id)
+    {
+        try
+        {
+            if (!await Confirm($"Delete blob {id}?")) return;
+            if (await Api.DeleteAsync(id))
+            {
+                var idx = _blobs.FindIndex(b => b.Id == id);
+                if (idx >= 0) _blobs.RemoveAt(idx);
+                ApplyFilter();
+                ShowToast("Blob deleted.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private bool _metaOpen;
+    private string _metaTitle = string.Empty;
+    private List<BlobMetadata> _meta = new();
+    private string _metaBlobId = string.Empty;
+    private bool _metaEdit;
+    private List<EditMetaRow> _metaEditList = new();
+
+    private async Task ShowMetadataAsync(string id)
+    {
+        try
+        {
+            _error = null;
+            var info = await Api.GetInfoAsync(id);
+            if (info is null)
+            {
+                _error = "Blob not found";
+                return;
+            }
+            _metaBlobId = info.Id;
+            _metaTitle = $"Metadata: {info.FileName} ({info.Id})";
+            _meta = info.Metadata ?? new List<BlobMetadata>();
+            _metaOpen = true;
+            _metaEdit = false;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void CloseMetadata()
+    {
+        _metaOpen = false;
+    }
+
+    private void BeginEdit()
+    {
+        _metaEdit = true;
+        _metaEditList = _meta.Select(m => new EditMetaRow { Name = m.Name, ContentType = m.ContentType, Value = m.Value }).ToList();
+    }
+
+    private async Task SaveEditAsync()
+    {
+        try
+        {
+            var payload = _metaEditList
+                .Where(m => !string.IsNullOrWhiteSpace(m.Name))
+                .Select(m => new BlobMetadata(m.Name.Trim(), string.IsNullOrWhiteSpace(m.ContentType) ? "text/plain" : m.ContentType.Trim(), m.Value ?? string.Empty))
+                .ToList();
+            var updated = await Api.SetMetadataAsync(_metaBlobId, payload);
+            _meta = updated.Metadata ?? new List<BlobMetadata>();
+            _metaEdit = false;
+            var row = _blobs.FirstOrDefault(b => b.Id == _metaBlobId);
+            if (row is not null) { row.MetadataCount = _meta.Count; ApplyFilter(); }
+            ShowToast("Metadata saved.");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void CancelEdit() => _metaEdit = false;
+
+    private void AddMetaRow()
+    {
+        _metaEditList.Add(new EditMetaRow { Name = string.Empty, ContentType = "text/plain", Value = string.Empty });
+        ShowToast("Row added.");
+    }
+
+    private void RemoveMetaRow(EditMetaRow row)
+    {
+        _metaEditList.Remove(row);
+        ShowToast("Row removed.");
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Escape", StringComparison.OrdinalIgnoreCase))
+            CloseMetadata();
+    }
+
+    private static BlobRow ToRow(BlobInfo b) => new()
+    {
+        Id = b.Id,
+        FileName = b.FileName,
+        SizeBytes = b.Size,
+        SizeDisplay = HumanSize(b.Size),
+        ContentType = b.ContentType ?? string.Empty,
+        CreatedUtc = b.CreatedUtc,
+        CreatedDisplay = b.CreatedUtc.ToString("u"),
+        MetadataCount = b.Metadata?.Count ?? 0
+    };
+
+    private static string HumanSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"]; double size = bytes; int u = 0;
+        while (size >= 1024 && u < units.Length - 1) { size /= 1024; u++; }
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##} {1}", size, units[u]);
+    }
+
+    private sealed class BlobRow
+    {
+        public string Id { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public long SizeBytes { get; set; }
+        public string SizeDisplay { get; set; } = string.Empty;
+        public string ContentType { get; set; } = string.Empty;
+        public DateTimeOffset CreatedUtc { get; set; }
+        public string CreatedDisplay { get; set; } = string.Empty;
+        public int MetadataCount { get; set; }
+    }
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+    private async Task CopyToClipboard(string? text)
+    {
+        if (!string.IsNullOrEmpty(text))
+        {
+            try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", text); }
+            catch { /* ignore */ }
+        }
+    }
+
+    private async Task<bool> Confirm(string message)
+    {
+        try { return await JS.InvokeAsync<bool>("confirm", message); }
+        catch { return true; }
+    }
+
+    private sealed class EditMetaRow
+    {
+        public string Name { get; init; } = string.Empty;
+        public string ContentType { get; init; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+    }
+
+    // Toast notifications
+    private bool _toastVisible;
+    private string _toastMessage = string.Empty;
+    private void ShowToast(string message)
+    {
+        _toastMessage = message;
+        _toastVisible = true;
+        _ = HideToastAfterDelay();
+    }
+    private async Task HideToastAfterDelay()
+    {
+        await Task.Delay(2500);
+        _toastVisible = false;
+        await InvokeAsync(StateHasChanged);
     }
 }

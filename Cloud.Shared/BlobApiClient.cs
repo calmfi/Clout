@@ -1,13 +1,12 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using Cloud.Shared;
 using NCrontab;
 
-namespace Clout.Client;
+namespace Cloud.Shared;
 
 /// <summary>
 /// Minimal client for interacting with the Local Cloud API.
-/// Cancellation: see AGENTS.md > "Cancellation & Async".
+/// Cancellation: see AGENTS.md section "Cancellation and Async".
 /// </summary>
 public sealed class BlobApiClient
 {
@@ -34,6 +33,7 @@ public sealed class BlobApiClient
     /// Gets metadata for a blob.
     /// </summary>
     /// <param name="id">Blob identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<BlobInfo?> GetInfoAsync(string id, CancellationToken cancellationToken = default)
     {
         return await _http.GetFromJsonAsync($"/api/blobs/{id}/info", AppJsonContext.Default.BlobInfo, cancellationToken);
@@ -44,6 +44,7 @@ public sealed class BlobApiClient
     /// </summary>
     /// <param name="filePath">Path to the file on disk.</param>
     /// <param name="contentType">Optional content type. Defaults to application/octet-stream.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<BlobInfo> UploadAsync(string filePath, string? contentType = null, CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
@@ -62,6 +63,7 @@ public sealed class BlobApiClient
     /// </summary>
     /// <param name="id">Blob identifier.</param>
     /// <param name="destinationPath">Target path for the downloaded file.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task DownloadAsync(string id, string destinationPath, CancellationToken cancellationToken = default)
     {
         using var response = await _http.GetAsync($"/api/blobs/{id}", cancellationToken);
@@ -75,6 +77,7 @@ public sealed class BlobApiClient
     /// </summary>
     /// <param name="id">Blob identifier.</param>
     /// <returns>True if deleted; false if not found.</returns>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<bool> DeleteAsync(string id, CancellationToken cancellationToken = default)
     {
         var response = await _http.DeleteAsync($"/api/blobs/{id}", cancellationToken);
@@ -90,7 +93,7 @@ public sealed class BlobApiClient
     /// <param name="metadata">Metadata entries to set (name, content type, value).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Updated <see cref="BlobInfo"/>.</returns>
-    public async Task<BlobInfo> SetMetadataAsync(string id, IEnumerable<Cloud.Shared.BlobMetadata> metadata, CancellationToken cancellationToken = default)
+    public async Task<BlobInfo> SetMetadataAsync(string id, IEnumerable<BlobMetadata> metadata, CancellationToken cancellationToken = default)
     {
         var response = await _http.PutAsJsonAsync($"/api/blobs/{id}/metadata", metadata, AppJsonContext.Default.IEnumerableBlobMetadata, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -104,6 +107,7 @@ public sealed class BlobApiClient
     /// <param name="dllPath">Path to the function .dll.</param>
     /// <param name="name">Function name. Assembly must contain a public method with this name.</param>
     /// <param name="runtime">Runtime identifier (default: "dotnet").</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<BlobInfo> RegisterFunctionAsync(string dllPath, string name, string runtime = "dotnet", CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
@@ -118,6 +122,43 @@ public sealed class BlobApiClient
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
         return result!;
+    }
+
+    /// <summary>
+    /// Registers multiple functions from the same .NET entrypoint DLL.
+    /// </summary>
+    public async Task<List<BlobInfo>> RegisterFunctionsAsync(string dllPath, IEnumerable<string> names, string runtime = "dotnet", CancellationToken cancellationToken = default)
+    {
+        using var form = new MultipartFormDataContent();
+        await using var fs = File.OpenRead(dllPath);
+        var file = new StreamContent(fs);
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(file, "file", Path.GetFileName(dllPath));
+        form.Add(new StringContent(string.Join(",", names ?? Array.Empty<string>())), "names");
+        form.Add(new StringContent(runtime), "runtime");
+
+        var response = await _http.PostAsync("/api/functions/register-many", form, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        return result ?? new List<BlobInfo>();
+    }
+
+    /// <summary>
+    /// Registers multiple functions from a provided stream containing the .NET assembly.
+    /// </summary>
+    public async Task<List<BlobInfo>> RegisterFunctionsAsync(Stream dllStream, string fileName, IEnumerable<string> names, string runtime = "dotnet", CancellationToken cancellationToken = default)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new StreamContent(dllStream);
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(file, "file", fileName);
+        form.Add(new StringContent(string.Join(",", names ?? Array.Empty<string>())), "names");
+        form.Add(new StringContent(runtime), "runtime");
+
+        var response = await _http.PostAsync("/api/functions/register-many", form, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        return result ?? new List<BlobInfo>();
     }
 
     /// <summary>
@@ -173,6 +214,16 @@ public sealed class BlobApiClient
     }
 
     /// <summary>
+    /// Validates whether the provided NCRONTAB expression is syntactically valid
+    /// (with or without seconds). Returns false on invalid expressions.
+    /// </summary>
+    public static bool IsValidCron(string expr)
+    {
+        try { return TryParseSchedule(expr, out _); }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// Removes the TimerTrigger metadata entry from the blob, if present.
     /// Preserves other existing metadata entries.
     /// </summary>
@@ -184,4 +235,3 @@ public sealed class BlobApiClient
         return result!;
     }
 }
-
