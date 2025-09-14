@@ -4,100 +4,107 @@
 @inject Services.ApiConfig ApiCfg
 @inject Clout.UI.Services.ToastService Toasts
 
-<h2>Admin</h2>
+<h2 class="text-2xl font-semibold mb-4 text-white">Admin</h2>
 
-<h3>Blobs</h3>
+<h3 class="text-lg font-semibold mb-2 text-white/90">Blobs</h3>
 @if (_loadingBlobs)
 {
-    <p>Loading blobs…</p>
+    <p class="text-gray-400">Loading blobs…</p>
 }
 else if (!string.IsNullOrEmpty(_errorBlobs))
 {
-    <p style="color:crimson">@_errorBlobs</p>
+    <p class="text-red-400">@_errorBlobs</p>
 }
 else
 {
-    <table>
-        <thead>
-            <tr>
-                <th>Id</th>
-                <th>Name</th>
-                <th>Size</th>
-                <th>ContentType</th>
-                <th>Created (UTC)</th>
-                <th>Actions</th>
+    <div class="overflow-x-auto rounded-lg shadow ring-1 ring-black/5">
+    <table class="min-w-full divide-y divide-gray-700">
+        <thead class="bg-gray-800/50">
+            <tr class="text-left text-xs font-semibold uppercase tracking-wide text-gray-400">
+                <th class="px-3 py-2">Id</th>
+                <th class="px-3 py-2">Name</th>
+                <th class="px-3 py-2">Size</th>
+                <th class="px-3 py-2">ContentType</th>
+                <th class="px-3 py-2">Created (UTC)</th>
+                <th class="px-3 py-2">Actions</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody class="divide-y divide-gray-800 bg-gray-900/30">
         @foreach (var b in _blobs)
         {
-            <tr>
-                <td>@b.Id</td>
-                <td>@b.FileName</td>
-                <td>@b.Size</td>
-                <td>@b.ContentType</td>
-                <td>@b.CreatedUtc.UtcDateTime</td>
-                <td>
-                    <a href="@($"{ApiCfg.BaseUrl}/api/blobs/{b.Id}")">Download</a>
+            <tr class="text-sm text-gray-200">
+                <td class="px-3 py-2 font-mono text-xs">@b.Id</td>
+                <td class="px-3 py-2">@b.FileName</td>
+                <td class="px-3 py-2">@b.Size</td>
+                <td class="px-3 py-2">@b.ContentType</td>
+                <td class="px-3 py-2">@b.CreatedUtc.UtcDateTime</td>
+                <td class="px-3 py-2">
+                    <a class="text-brand hover:text-brand-700" href="@($"{ApiCfg.BaseUrl}/api/blobs/{b.Id}")">Download</a>
                 </td>
             </tr>
         }
         </tbody>
     </table>
+    </div>
 }
 
-<h3 style="margin-top:24px;">Functions</h3>
+<h3 class="text-lg font-semibold mt-6 mb-2 text-white/90">Functions</h3>
 @if (_loadingFunctions)
 {
-    <p>Loading functions…</p>
+    <p class="text-gray-400">Loading functions…</p>
 }
 else if (!string.IsNullOrEmpty(_errorFunctions))
 {
-    <p style="color:crimson">@_errorFunctions</p>
+    <p class="text-red-400">@_errorFunctions</p>
 }
 else
 {
-    <table>
-        <thead>
-            <tr>
-                <th>Blob Id</th>
-                <th>Entrypoint</th>
-                <th>Name</th>
-                <th>Runtime</th>
-                <th>Schedule</th>
-                <th>Set/Clear</th>
+    <div class="overflow-x-auto rounded-lg shadow ring-1 ring-black/5">
+    <table class="min-w-full divide-y divide-gray-700">
+        <thead class="bg-gray-800/50">
+            <tr class="text-left text-xs font-semibold uppercase tracking-wide text-gray-400">
+                <th class="px-3 py-2">Blob Id</th>
+                <th class="px-3 py-2">Entrypoint</th>
+                <th class="px-3 py-2">Name</th>
+                <th class="px-3 py-2">Runtime</th>
+                <th class="px-3 py-2">Schedule</th>
+                <th class="px-3 py-2">Set/Clear</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody class="divide-y divide-gray-800 bg-gray-900/30">
         @foreach (var f in _functions)
         {
             var name = f.Metadata.FirstOrDefault(m => m.Name == "function.name")?.Value;
             var runtime = f.Metadata.FirstOrDefault(m => m.Name == "function.runtime")?.Value;
             var entry = f.Metadata.FirstOrDefault(m => m.Name == "function.entrypoint")?.Value;
             var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value;
-            <tr>
-                <td>@f.Id</td>
-                <td>@entry</td>
-                <td>@name</td>
-                <td>@runtime</td>
-                <td>@schedule</td>
-                <td>
-                    <input @bind="_scheduleInputs[f.Id]" @bind:event="oninput" placeholder="* * * * *" style="width:160px" />
+            <tr class="text-sm text-gray-200">
+                <td class="px-3 py-2 font-mono text-xs">@f.Id</td>
+                <td class="px-3 py-2">@entry</td>
+                <td class="px-3 py-2">@name</td>
+                <td class="px-3 py-2">@runtime</td>
+                <td class="px-3 py-2">@schedule</td>
+                <td class="px-3 py-2">
+                    <input class="border border-gray-600 bg-transparent rounded px-2 py-1 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-brand"
+                           @bind="_scheduleInputs[f.Id]" @bind:event="oninput" placeholder="* * * * *" />
                     @if (_scheduleErrors.TryGetValue(f.Id, out var err) && !string.IsNullOrWhiteSpace(err))
                     {
-                        <div style="color:#b42318; font-size:12px;">@err</div>
+                        <div class="text-red-400 text-xs mt-1">@err</div>
                     }
-                    <div style="margin-top:6px;">
-                        <button disabled="@_busy || !IsCronValid(_scheduleInputs.GetValueOrDefault(f.Id))"
+                    <div class="mt-2 space-x-2">
+                        <button class="px-3 py-1 rounded bg-brand text-white hover:bg-brand-700 disabled:opacity-50"
+                                disabled="@_busy || !IsCronValid(_scheduleInputs.GetValueOrDefault(f.Id))"
                                 title="@(IsCronValid(_scheduleInputs.GetValueOrDefault(f.Id)) ? string.Empty : "Enter 5 or 6-field NCRONTAB")"
                                 @onclick="() => OnSetScheduleAsync(f.Id)">Set</button>
-                        <button disabled="@_busy || string.IsNullOrEmpty(schedule)" @onclick="() => OnClearScheduleAsync(f.Id)">Clear</button>
+                        <button class="px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-600 disabled:opacity-50"
+                                disabled="@_busy || string.IsNullOrEmpty(schedule)" @onclick="() => OnClearScheduleAsync(f.Id)">Clear</button>
                     </div>
                 </td>
             </tr>
         }
         </tbody>
     </table>
+    </div>
 }
 
 @code {

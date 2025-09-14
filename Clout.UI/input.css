@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom base styles */
+@layer base {
+  html, body {
+    @apply bg-[#0b1020] text-gray-200;
+  }
+}
+

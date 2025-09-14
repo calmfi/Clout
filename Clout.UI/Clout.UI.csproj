@@ -12,4 +12,26 @@
   <ItemGroup>
     <ProjectReference Include="..\Cloud.Shared\Cloud.Shared.csproj" />
   </ItemGroup>
+
+  <!-- Tailwind CSS build integration -->
+  <PropertyGroup>
+    <RepoRoot>$(MSBuildProjectDirectory)\..</RepoRoot>
+  </PropertyGroup>
+
+  <!-- Install npm deps once if node_modules is missing -->
+  <Target Name="EnsureNodeModules" Condition="Exists('$(RepoRoot)\package.json') and !Exists('$(RepoRoot)\node_modules')">
+    <Message Text="Installing npm packages (one-time)" Importance="high" />
+    <Exec WorkingDirectory="$(RepoRoot)" Command="npm install" />
+  </Target>
+
+  <!-- Build Tailwind before the .NET Build -->
+  <Target Name="TailwindBuild" BeforeTargets="Build" DependsOnTargets="EnsureNodeModules" Condition="Exists('$(RepoRoot)\package.json')">
+    <Message Text="Building Tailwind CSS" Importance="high" />
+    <Exec WorkingDirectory="$(RepoRoot)" Command="npm run build:css" />
+  </Target>
+
+  <!-- Clean generated CSS on dotnet clean -->
+  <Target Name="TailwindClean" AfterTargets="Clean">
+    <Delete Files="$(MSBuildProjectDirectory)\wwwroot\css\site.css" ContinueOnError="true" />
+  </Target>
 </Project>
