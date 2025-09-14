@@ -1,13 +1,9 @@
-using System.Text.Json;
-using Microsoft.AspNetCore.OpenApi;
-using Microsoft.OpenApi.Models;
-using Microsoft.OpenApi.Any;
 using Cloud.Shared;
 using Clout.Api;
-using System.Reflection;
-using System.Runtime.Loader;
 using Clout.Api.Functions;
-using NCrontab;
+using Microsoft.OpenApi.Any;
+using Microsoft.OpenApi.Models;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
