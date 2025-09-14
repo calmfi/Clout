@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/Applications/">
     <Project Path="Clout.Client/Clout.Client.csproj" />
+    <Project Path="Clout.UI/Clout.UI.csproj" />
   </Folder>
   <Folder Name="/Common/">
     <Project Path="Cloud.Shared/Cloud.Shared.csproj" />

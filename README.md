@@ -5,6 +5,7 @@
 ```
 Clout.slnx
 ├─ Applications/
+│  ├─ Clout.UI/              # Blazor Server app with Fluent UI
 │  └─ Clout.Client/          # Console client for the API
 ├─ API/
 │  └─ Clout.Api/             # ASP.NET Core Minimal API (Swagger enabled)
@@ -18,6 +19,7 @@ Clout.slnx
 
 - Restore/build all: `dotnet build`
 - Run API: `dotnet run --project Clout.Api` (Swagger at `/swagger`)
+- Run Blazor app: `dotnet run --project Clout.UI`
 - Run client: `dotnet run --project Clout.Client -- <cmd>`
   - Blob commands (grouped under `blob`):
     - `blob list`, `blob info <id>`, `blob upload <path>`, `blob download <id> <dest>`, `blob delete <id>`,
