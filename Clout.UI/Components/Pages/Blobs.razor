@@ -1,0 +1,54 @@
+@page "/"
+@page "/blobs"
+@using Cloud.Shared
+@inject Services.ICloutApiClient Api
+@inject Services.ApiConfig ApiCfg
+
+<h2 class="text-2xl font-semibold mb-4 text-white">Blobs</h2>
+
+@if (_loading)
+{
+    <p class="text-gray-400">Loading blobs…</p>
+}
+else if (!string.IsNullOrEmpty(_error))
+{
+    <p class="text-red-400">@_error</p>
+}
+else
+{
+    <FluentDataGrid TGridItem="BlobInfo" Items="@_blobs.AsQueryable()" GridTemplateColumns="2fr 2fr 1fr 1fr 2fr 1fr">
+        <PropertyColumn Title="Id" Property="(BlobInfo b) => b.Id" />
+        <PropertyColumn Title="Name" Property="(BlobInfo b) => b.FileName" />
+        <PropertyColumn Title="Size" Property="(BlobInfo b) => b.Size" />
+        <PropertyColumn Title="ContentType" Property="(BlobInfo b) => b.ContentType" />
+        <TemplateColumn Title="Created (UTC)">
+            @context.CreatedUtc.UtcDateTime
+        </TemplateColumn>
+        <TemplateColumn Title="Actions">
+            <a class="text-brand hover:text-brand-700" href="@($"{ApiCfg.BaseUrl}/api/blobs/@context.Id")">Download</a>
+        </TemplateColumn>
+    </FluentDataGrid>
+}
+
+@code {
+    private List<BlobInfo> _blobs = new();
+    private bool _loading;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _loading = true;
+        try
+        {
+            _blobs = (await Api.GetBlobsAsync()).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

@@ -1,15 +1,18 @@
 <HeadContent>
     <link rel="stylesheet" href="css/site.css" />
+    <link rel="stylesheet" href="_content/Microsoft.FluentUI.AspNetCore.Components/css/reboot.css" />
+    <script src="_content/Microsoft.FluentUI.AspNetCore.Components/js/loading-theme.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="_content/Microsoft.FluentUI.AspNetCore.Components/Microsoft.FluentUI.AspNetCore.Components.lib.module.js" type="module"></script>
     <title>Clout UI</title>
 </HeadContent>
 
 <Router AppAssembly="@typeof(App).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.MainLayout)" />
+        <RouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.AppMainLayout)" />
     </Found>
     <NotFound>
-        <LayoutView Layout="@typeof(Layout.MainLayout)">
+        <LayoutView Layout="@typeof(Layout.AppMainLayout)">
             <p>Sorry, there's nothing at this address.</p>
         </LayoutView>
     </NotFound>

@@ -1,0 +1,165 @@
+@page "/functions"
+@using Cloud.Shared
+@inject Services.ICloutApiClient Api
+@inject Services.ApiConfig ApiCfg
+@inject Clout.UI.Services.ToastService Toasts
+
+<h2 class="text-2xl font-semibold mb-4 text-white">Functions</h2>
+
+@if (_loading)
+{
+    <p class="text-gray-400">Loading functions…</p>
+}
+else if (!string.IsNullOrEmpty(_error))
+{
+    <p class="text-red-400">@_error</p>
+}
+else
+{
+    <FluentDataGrid TGridItem="BlobInfo" Items="@_functions.AsQueryable()" GridTemplateColumns="2fr 1fr 1fr 1fr 2fr">
+        <PropertyColumn Title="Blob Id" Property="(BlobInfo f) => f.Id" />
+        <TemplateColumn Title="Entrypoint">
+            @context.Metadata.FirstOrDefault(m => m.Name == "function.entrypoint")?.Value
+        </TemplateColumn>
+        <TemplateColumn Title="Name">
+            @context.Metadata.FirstOrDefault(m => m.Name == "function.name")?.Value
+        </TemplateColumn>
+        <TemplateColumn Title="Runtime">
+            @context.Metadata.FirstOrDefault(m => m.Name == "function.runtime")?.Value
+        </TemplateColumn>
+        <TemplateColumn Title="Schedule">
+            @context.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value
+            <div class="mt-2 space-x-2">
+                <input class="border border-gray-600 bg-transparent rounded px-2 py-1 text-sm w-40 focus:outline-none focus:ring-2 focus:ring-brand"
+                       @bind="_scheduleInputs[context.Id]" @bind:event="oninput" placeholder="* * * * *" />
+                @if (_scheduleErrors.TryGetValue(context.Id, out var err) && !string.IsNullOrWhiteSpace(err))
+                {
+                    <div class="text-red-400 text-xs mt-1">@err</div>
+                }
+                <button class="px-3 py-1 rounded bg-brand text-white hover:bg-brand-700 disabled:opacity-50"
+                        disabled="@_busy || !IsCronValid(_scheduleInputs.GetValueOrDefault(context.Id))"
+                        title="@(IsCronValid(_scheduleInputs.GetValueOrDefault(context.Id)) ? string.Empty : "Enter 5 or 6-field NCRONTAB")"
+                        @onclick="() => OnSetScheduleAsync(context.Id)">Set</button>
+                <button class="px-3 py-1 rounded bg-gray-700 text-white hover:bg-gray-600 disabled:opacity-50"
+                        disabled="@_busy || string.IsNullOrEmpty(context.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value)"
+                        @onclick="() => OnClearScheduleAsync(context.Id)">Clear</button>
+            </div>
+        </TemplateColumn>
+    </FluentDataGrid>
+}
+
+@code {
+    private List<BlobInfo> _functions = new();
+    private bool _loading;
+    private string? _error;
+    private readonly Dictionary<string, string> _scheduleInputs = new();
+    private readonly Dictionary<string, string> _scheduleErrors = new();
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _loading = true;
+        try
+        {
+            _functions = (await Api.GetFunctionsAsync()).ToList();
+            foreach (var f in _functions)
+            {
+                var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value ?? string.Empty;
+                _scheduleInputs[f.Id] = schedule;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSetScheduleAsync(string id)
+    {
+        if (!_scheduleInputs.TryGetValue(id, out var expr) || string.IsNullOrWhiteSpace(expr))
+            return;
+
+        if (!IsCronValid(expr, out var error))
+        {
+            _scheduleErrors[id] = error ?? "Invalid expression";
+            Toasts.Show(_scheduleErrors[id], Services.ToastLevel.Error);
+            return;
+        }
+        _scheduleErrors.Remove(id);
+        _busy = true;
+        try
+        {
+            await Api.SetFunctionScheduleAsync(id, expr);
+            await RefreshAsync();
+            Toasts.Show("Schedule updated", Services.ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Show(ex.Message, Services.ToastLevel.Error, 5000);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OnClearScheduleAsync(string id)
+    {
+        _busy = true;
+        try
+        {
+            await Api.ClearFunctionScheduleAsync(id);
+            await RefreshAsync();
+            Toasts.Show("Schedule cleared", Services.ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Toasts.Show(ex.Message, Services.ToastLevel.Error, 5000);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        var list = await Api.GetFunctionsAsync();
+        _functions = list.ToList();
+        foreach (var f in _functions)
+        {
+            var schedule = f.Metadata.FirstOrDefault(m => m.Name == "TimerTrigger")?.Value ?? string.Empty;
+            _scheduleInputs[f.Id] = schedule;
+        }
+        StateHasChanged();
+    }
+
+    private static bool IsCronValid(string? expr) => IsCronValid(expr, out _);
+
+    private static bool IsCronValid(string? expr, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(expr)) { error = "Empty expression"; return false; }
+        var parts = expr.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length is not (5 or 6)) { error = "Use 5 or 6 fields"; return false; }
+        foreach (var p in parts)
+        {
+            if (string.IsNullOrWhiteSpace(p)) { error = "Empty field"; return false; }
+            foreach (var ch in p)
+            {
+                if (!(char.IsDigit(ch) || ch is '*' or '/' or '-' or ',' or '?'))
+                {
+                    error = $"Invalid char '{ch}'";
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+}

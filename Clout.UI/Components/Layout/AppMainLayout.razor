@@ -1,0 +1,22 @@
+@inherits LayoutComponentBase
+@using Microsoft.FluentUI.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Routing
+
+<FluentDesignSystemProvider>
+    <FluentMainLayout>
+        <Header>
+            <h1 class="text-xl font-semibold">Clout</h1>
+        </Header>
+        <NavMenuContent>
+            <FluentNavMenu>
+                <FluentNavLink Href="/blobs" Match="NavLinkMatch.Prefix">Blobs</FluentNavLink>
+                <FluentNavLink Href="/functions" Match="NavLinkMatch.Prefix">Functions</FluentNavLink>
+            </FluentNavMenu>
+        </NavMenuContent>
+        <Body>
+            @Body
+        </Body>
+    </FluentMainLayout>
+    <Toasts />
+    
+</FluentDesignSystemProvider>
