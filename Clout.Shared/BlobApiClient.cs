@@ -1,15 +1,15 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using Cloud.Shared.Models;
+using Clout.Shared.Models;
 using Quartz;
 
-namespace Cloud.Shared;
+namespace Clout.Shared;
 
 /// <summary>
 /// Minimal client for interacting with the Local Cloud API.
 /// Cancellation: see AGENTS.md section "Cancellation and Async".
 /// </summary>
-public sealed class BlobApiClient
+public sealed class BlobApiClient : IDisposable
 {
     private readonly HttpClient _http;
     /// <summary>
@@ -20,13 +20,22 @@ public sealed class BlobApiClient
     {
         _http = new HttpClient { BaseAddress = new Uri(baseAddress) };
     }
+    /// <summary>
+    /// Disposes underlying HTTP resources.
+    /// </summary>
+    public void Dispose()
+    {
+        _http.Dispose();
+    }
 
     /// <summary>
     /// Lists all blobs with metadata.
     /// </summary>
     public async Task<List<BlobInfo>> ListAsync(CancellationToken cancellationToken = default)
     {
-        var items = await _http.GetFromJsonAsync("/api/blobs", AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        var items = await _http
+            .GetFromJsonAsync(new Uri("/api/blobs", UriKind.Relative), AppJsonContext.Default.ListBlobInfo, cancellationToken)
+            .ConfigureAwait(false);
         return items ?? new List<BlobInfo>();
     }
 
@@ -35,7 +44,9 @@ public sealed class BlobApiClient
     /// </summary>
     public async Task<List<BlobInfo>> ListFunctionsAsync(CancellationToken cancellationToken = default)
     {
-        var items = await _http.GetFromJsonAsync("/api/functions", AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        var items = await _http
+            .GetFromJsonAsync(new Uri("/api/functions", UriKind.Relative), AppJsonContext.Default.ListBlobInfo, cancellationToken)
+            .ConfigureAwait(false);
         return items ?? new List<BlobInfo>();
     }
 
@@ -46,7 +57,9 @@ public sealed class BlobApiClient
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<BlobInfo?> GetInfoAsync(string id, CancellationToken cancellationToken = default)
     {
-        return await _http.GetFromJsonAsync($"/api/blobs/{id}/info", AppJsonContext.Default.BlobInfo, cancellationToken);
+        return await _http
+            .GetFromJsonAsync(new Uri($"/api/blobs/{id}/info", UriKind.Relative), AppJsonContext.Default.BlobInfo, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -58,13 +71,13 @@ public sealed class BlobApiClient
     public async Task<BlobInfo> UploadAsync(string filePath, string? contentType = null, CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
-        await using var fs = File.OpenRead(filePath);
-        var streamContent = new StreamContent(fs);
+        using var fs = File.OpenRead(filePath);
+        using var streamContent = new StreamContent(fs);
         streamContent.Headers.ContentType = new MediaTypeHeaderValue(contentType ?? "application/octet-stream");
         form.Add(streamContent, "file", Path.GetFileName(filePath));
-        var response = await _http.PostAsync("/api/blobs", form, cancellationToken);
+        using var response = await _http.PostAsync(new Uri("/api/blobs", UriKind.Relative), form, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<BlobInfo>(cancellationToken: cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<BlobInfo>(cancellationToken: cancellationToken).ConfigureAwait(false);
         return result!;
     }
 
@@ -76,10 +89,10 @@ public sealed class BlobApiClient
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task DownloadAsync(string id, string destinationPath, CancellationToken cancellationToken = default)
     {
-        using var response = await _http.GetAsync($"/api/blobs/{id}", cancellationToken);
+        using var response = await _http.GetAsync(new Uri($"/api/blobs/{id}", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var fs = File.Create(destinationPath);
-        await response.Content.CopyToAsync(fs, cancellationToken);
+        using var fs = File.Create(destinationPath);
+        await response.Content.CopyToAsync(fs, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -90,7 +103,7 @@ public sealed class BlobApiClient
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task<bool> DeleteAsync(string id, CancellationToken cancellationToken = default)
     {
-        var response = await _http.DeleteAsync($"/api/blobs/{id}", cancellationToken);
+        using var response = await _http.DeleteAsync(new Uri($"/api/blobs/{id}", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
         response.EnsureSuccessStatusCode();
         return true;
@@ -105,9 +118,9 @@ public sealed class BlobApiClient
     /// <returns>Updated <see cref="BlobInfo"/>.</returns>
     public async Task<BlobInfo> SetMetadataAsync(string id, IEnumerable<BlobMetadata> metadata, CancellationToken cancellationToken = default)
     {
-        var response = await _http.PutAsJsonAsync($"/api/blobs/{id}/metadata", metadata, AppJsonContext.Default.IEnumerableBlobMetadata, cancellationToken);
+        using var response = await _http.PutAsJsonAsync(new Uri($"/api/blobs/{id}/metadata", UriKind.Relative), metadata, AppJsonContext.Default.IEnumerableBlobMetadata, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken).ConfigureAwait(false);
         return result!;
     }
 
@@ -121,16 +134,18 @@ public sealed class BlobApiClient
     public async Task<BlobInfo> RegisterFunctionAsync(string dllPath, string name, string runtime = "dotnet", CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
-        await using var fs = File.OpenRead(dllPath);
-        var file = new StreamContent(fs);
+        using var fs = File.OpenRead(dllPath);
+        using var file = new StreamContent(fs);
         file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         form.Add(file, "file", Path.GetFileName(dllPath));
-        form.Add(new StringContent(name), "name");
-        form.Add(new StringContent(runtime), "runtime");
+        using var sc1 = new StringContent(name);
+        using var sc2 = new StringContent(runtime);
+        form.Add(sc1, "name");
+        form.Add(sc2, "runtime");
 
-        var response = await _http.PostAsync("/api/functions/register", form, cancellationToken);
+        using var response = await _http.PostAsync(new Uri("/api/functions/register", UriKind.Relative), form, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken).ConfigureAwait(false);
         return result!;
     }
 
@@ -140,17 +155,19 @@ public sealed class BlobApiClient
     public async Task<List<BlobInfo>> RegisterFunctionsAsync(string dllPath, IEnumerable<string> names, string runtime = "dotnet", string? cron = null, CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
-        await using var fs = File.OpenRead(dllPath);
-        var file = new StreamContent(fs);
+        using var fs = File.OpenRead(dllPath);
+        using var file = new StreamContent(fs);
         file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         form.Add(file, "file", Path.GetFileName(dllPath));
-        form.Add(new StringContent(string.Join(",", names ?? Array.Empty<string>())), "names");
-        form.Add(new StringContent(runtime), "runtime");
-        if (!string.IsNullOrWhiteSpace(cron)) form.Add(new StringContent(cron), "cron");
+        using var scNames = new StringContent(string.Join(",", names ?? Array.Empty<string>()));
+        using var scRuntime = new StringContent(runtime);
+        form.Add(scNames, "names");
+        form.Add(scRuntime, "runtime");
+        if (!string.IsNullOrWhiteSpace(cron)) { using var scCron = new StringContent(cron); form.Add(scCron, "cron"); }
 
-        var response = await _http.PostAsync("/api/functions/register-many", form, cancellationToken);
+        using var response = await _http.PostAsync(new Uri("/api/functions/register-many", UriKind.Relative), form, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken).ConfigureAwait(false);
         return result ?? new List<BlobInfo>();
     }
 
@@ -160,16 +177,18 @@ public sealed class BlobApiClient
     public async Task<List<BlobInfo>> RegisterFunctionsAsync(Stream dllStream, string fileName, IEnumerable<string> names, string runtime = "dotnet", string? cron = null, CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
-        var file = new StreamContent(dllStream);
-        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        form.Add(file, "file", fileName);
-        form.Add(new StringContent(string.Join(",", names ?? Array.Empty<string>())), "names");
-        form.Add(new StringContent(runtime), "runtime");
-        if (!string.IsNullOrWhiteSpace(cron)) form.Add(new StringContent(cron), "cron");
+        using var file2 = new StreamContent(dllStream);
+        file2.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(file2, "file", fileName);
+        using var scNames2 = new StringContent(string.Join(",", names ?? Array.Empty<string>()));
+        using var scRuntime2 = new StringContent(runtime);
+        form.Add(scNames2, "names");
+        form.Add(scRuntime2, "runtime");
+        if (!string.IsNullOrWhiteSpace(cron)) { using var scCron2 = new StringContent(cron); form.Add(scCron2, "cron"); }
 
-        var response = await _http.PostAsync("/api/functions/register-many", form, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        using var response2 = await _http.PostAsync(new Uri("/api/functions/register-many", UriKind.Relative), form, cancellationToken).ConfigureAwait(false);
+        response2.EnsureSuccessStatusCode();
+        var result = await response2.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken).ConfigureAwait(false);
         return result ?? new List<BlobInfo>();
     }
 
@@ -183,9 +202,9 @@ public sealed class BlobApiClient
             ["name"] = name,
             ["runtime"] = runtime,
         };
-        var response = await _http.PostAsJsonAsync($"/api/functions/register-from/{dllBlobId}", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        using var response3 = await _http.PostAsJsonAsync(new Uri($"/api/functions/register-from/{dllBlobId}", UriKind.Relative), payload, AppJsonContext.Default.DictionaryStringString, cancellationToken).ConfigureAwait(false);
+        response3.EnsureSuccessStatusCode();
+        var result = await response3.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken).ConfigureAwait(false);
         return result!;
     }
 
@@ -195,9 +214,9 @@ public sealed class BlobApiClient
     public async Task<List<BlobInfo>> RegisterFunctionsFromExistingAsync(string dllBlobId, IEnumerable<string> names, string runtime = "dotnet", string? cron = null, CancellationToken cancellationToken = default)
     {
         var payload = new RegisterMany { Names = names?.ToArray() ?? Array.Empty<string>(), Runtime = runtime, Cron = cron };
-        var response = await _http.PostAsJsonAsync($"/api/functions/register-many-from/{dllBlobId}", payload, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        using var response4 = await _http.PostAsJsonAsync(new Uri($"/api/functions/register-many-from/{dllBlobId}", UriKind.Relative), payload, cancellationToken).ConfigureAwait(false);
+        response4.EnsureSuccessStatusCode();
+        var result = await response4.Content.ReadFromJsonAsync(AppJsonContext.Default.ListBlobInfo, cancellationToken).ConfigureAwait(false);
         return result ?? new List<BlobInfo>();
     }
 
@@ -218,8 +237,8 @@ public sealed class BlobApiClient
         if (!TryParseSchedule(cron, out _))
             throw new ArgumentException("Invalid cron expression (Quartz format expected).", nameof(cron));
 
-        var info = await RegisterFunctionAsync(dllPath, name, runtime, cancellationToken);
-        var updated = await SetTimerTriggerAsync(info.Id, cron, cancellationToken);
+        var info = await RegisterFunctionAsync(dllPath, name, runtime, cancellationToken).ConfigureAwait(false);
+        var updated = await SetTimerTriggerAsync(info.Id, cron, cancellationToken).ConfigureAwait(false);
         return updated;
     }
 
@@ -234,9 +253,9 @@ public sealed class BlobApiClient
             throw new ArgumentException("Invalid cron expression (Quartz format expected).", nameof(cron));
 
         var payload = new Dictionary<string, string> { ["expression"] = cron };
-        var response = await _http.PostAsJsonAsync($"/api/functions/{id}/schedule", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
+        using var response = await _http.PostAsJsonAsync(new Uri($"/api/functions/{id}/schedule", UriKind.Relative), payload, AppJsonContext.Default.DictionaryStringString, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken).ConfigureAwait(false);
         return result!;
     }
 
@@ -252,9 +271,11 @@ public sealed class BlobApiClient
         return false;
     }
 
+    private static readonly char[] SplitWhitespace = new[] { ' ', '\t' };
+
     private static string NormalizeCron(string expr)
     {
-        var parts = expr.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        var parts = expr.Split(SplitWhitespace, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 5)
         {
             return $"0 {expr}"; // add seconds for Quartz
@@ -266,11 +287,7 @@ public sealed class BlobApiClient
     /// Validates whether the provided cron expression is syntactically valid (Quartz)
     /// (with or without seconds). Returns false on invalid expressions.
     /// </summary>
-    public static bool IsValidCron(string expr)
-    {
-        try { return TryParseSchedule(expr, out _); }
-        catch { return false; }
-    }
+    public static bool IsValidCron(string expr) => TryParseSchedule(expr, out _);
 
     /// <summary>
     /// Removes the TimerTrigger metadata entry from the blob, if present.
@@ -278,9 +295,9 @@ public sealed class BlobApiClient
     /// </summary>
     public async Task<BlobInfo> ClearTimerTriggerAsync(string id, CancellationToken cancellationToken = default)
     {
-        var response = await _http.DeleteAsync($"/api/functions/{id}/schedule", cancellationToken);
+        using var response = await _http.DeleteAsync(new Uri($"/api/functions/{id}/schedule", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken).ConfigureAwait(false);
         return result!;
     }
 
@@ -289,28 +306,41 @@ public sealed class BlobApiClient
     /// </summary>
     public async Task<List<string>> CronNextAsync(string expr, int count = 5, CancellationToken cancellationToken = default)
     {
-        var url = $"/api/functions/cron-next?expr={Uri.EscapeDataString(expr)}&count={count}";
-        var response = await _http.GetAsync(url, cancellationToken);
+        var url = new Uri($"/api/functions/cron-next?expr={Uri.EscapeDataString(expr)}&count={count}", UriKind.Relative);
+        using var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var list = await response.Content.ReadFromJsonAsync<List<string>>(cancellationToken: cancellationToken);
+        var list = await response.Content.ReadFromJsonAsync<List<string>>(cancellationToken: cancellationToken).ConfigureAwait(false);
         return list ?? new List<string>();
     }
 
+    /// <summary>
+    /// Schedules all functions derived from the given source blob id using the provided NCRONTAB expression.
+    /// </summary>
+    /// <param name="sourceId">The blob id used as the source for functions.</param>
+    /// <param name="cron">NCRONTAB expression (5- or 6-field). Seconds are supported.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The number of functions scheduled.</returns>
     public async Task<int> ScheduleAllAsync(string sourceId, string cron, CancellationToken cancellationToken = default)
     {
         var payload = new Dictionary<string, string> { ["sourceId"] = sourceId, ["cron"] = cron };
-        var response = await _http.PostAsJsonAsync("/api/functions/schedule-all", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
+        using var response = await _http.PostAsJsonAsync(new Uri("/api/functions/schedule-all", UriKind.Relative), payload, AppJsonContext.Default.DictionaryStringString, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var dict = await response.Content.ReadFromJsonAsync<Dictionary<string, int>>(cancellationToken: cancellationToken);
+        var dict = await response.Content.ReadFromJsonAsync<Dictionary<string, int>>(cancellationToken: cancellationToken).ConfigureAwait(false);
         return dict != null && dict.TryGetValue("count", out var c) ? c : 0;
     }
 
+    /// <summary>
+    /// Removes all scheduled timers for functions derived from the given source blob id.
+    /// </summary>
+    /// <param name="sourceId">The blob id whose derived functions should be unscheduled.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The number of functions unscheduled.</returns>
     public async Task<int> UnscheduleAllAsync(string sourceId, CancellationToken cancellationToken = default)
     {
         var payload = new Dictionary<string, string> { ["sourceId"] = sourceId };
-        var response = await _http.PostAsJsonAsync("/api/functions/unschedule-all", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
+        using var response = await _http.PostAsJsonAsync(new Uri("/api/functions/unschedule-all", UriKind.Relative), payload, AppJsonContext.Default.DictionaryStringString, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var dict = await response.Content.ReadFromJsonAsync<Dictionary<string, int>>(cancellationToken: cancellationToken);
+        var dict = await response.Content.ReadFromJsonAsync<Dictionary<string, int>>(cancellationToken: cancellationToken).ConfigureAwait(false);
         return dict != null && dict.TryGetValue("count", out var c) ? c : 0;
     }
 }

@@ -9,7 +9,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Cloud.Shared\Cloud.Shared.csproj" />
+    <ProjectReference Include="..\Clout.Shared\Clout.Shared.csproj" />
   </ItemGroup>
 
   <ItemGroup>

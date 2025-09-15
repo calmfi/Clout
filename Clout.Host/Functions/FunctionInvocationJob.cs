@@ -1,9 +1,9 @@
-using Cloud.Shared.Abstractions;
+using Clout.Shared.Abstractions;
 using Quartz;
 
 namespace Clout.Host.Functions;
 
-internal sealed class FunctionInvocationJob : IJob
+public sealed class FunctionInvocationJob : IJob
 {
     private readonly IBlobStorage _storage;
     private readonly ILogger<FunctionInvocationJob> _logger;
@@ -28,7 +28,7 @@ internal sealed class FunctionInvocationJob : IJob
 
         try
         {
-            await using var stream = await _storage.OpenReadAsync(blobId, ct);
+            await using var stream = await _storage.OpenReadAsync(blobId, ct).ConfigureAwait(false);
             if (stream is null)
             {
                 _logger.LogWarning("Blob {BlobId} not found for function {Function}", blobId, functionName);
@@ -38,12 +38,12 @@ internal sealed class FunctionInvocationJob : IJob
             var temp = Path.Combine(Path.GetTempPath(), $"clout_fn_{blobId}_{Guid.NewGuid():N}.dll");
             await using (var fs = File.Create(temp))
             {
-                await stream.CopyToAsync(fs, ct);
+                await stream.CopyToAsync(fs, ct).ConfigureAwait(false);
             }
 
             try
             {
-                await FunctionRunner.RunAsync(temp, functionName, ct);
+                await FunctionRunner.RunAsync(temp, functionName, ct).ConfigureAwait(false);
                 _logger.LogInformation("Function {Function} completed for blob {BlobId}", functionName, blobId);
             }
             finally

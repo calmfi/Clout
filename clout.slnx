@@ -5,7 +5,7 @@
     <Project Path="Clout.UI/Clout.UI.csproj" Id="9029138c-9c47-4d92-9915-e572c205f4c5" />
   </Folder>
   <Folder Name="/Common/">
-    <Project Path="Cloud.Shared/Cloud.Shared.csproj" />
+    <Project Path="Clout.Shared/Clout.Shared.csproj" />
   </Folder>
   <Folder Name="/Samples/">
     <Project Path="samples/Sample.Function/Sample.Function.csproj" />

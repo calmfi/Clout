@@ -1,4 +1,4 @@
-namespace Cloud.Shared;
+namespace Clout.Shared;
 
 internal sealed class RegisterMany
 {
@@ -6,4 +6,3 @@ internal sealed class RegisterMany
     public string? Runtime { get; set; } = "dotnet";
     public string? Cron { get; set; }
 }
-

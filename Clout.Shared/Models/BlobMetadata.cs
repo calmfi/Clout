@@ -1,4 +1,4 @@
-namespace Cloud.Shared.Models;
+namespace Clout.Shared.Models;
 
 /// <summary>
 /// Represents a single blob metadata tuple: name, content type, and value.

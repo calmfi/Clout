@@ -7,7 +7,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Threading.Tasks;
-using Cloud.Shared.Models;
+using Clout.Shared.Models;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -25,7 +25,8 @@ namespace Clout.Host.IntegrationTests
             if (Directory.Exists(storage))
             {
                 try { Directory.Delete(storage, recursive: true); }
-                catch { /* best-effort cleanup */ }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
         }
 
@@ -35,13 +36,13 @@ namespace Clout.Host.IntegrationTests
             CleanupStorage();
 
             HttpClient client = _factory.CreateClient();
-            HttpResponseMessage resp = await client.GetAsync("/api/blobs").ConfigureAwait(false);
+            HttpResponseMessage resp = await client.GetAsync(new Uri("/api/blobs", UriKind.Relative));
             if (resp.StatusCode != HttpStatusCode.OK)
             {
-                _output.WriteLine("Body: " + await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+                _output.WriteLine("Body: " + await resp.Content.ReadAsStringAsync());
             }
             Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-            List<BlobInfo>? list = await resp.Content.ReadFromJsonAsync<List<BlobInfo>>().ConfigureAwait(false);
+            List<BlobInfo>? list = await resp.Content.ReadFromJsonAsync<List<BlobInfo>>();
             Assert.NotNull(list);
             Assert.Empty(list!);
         }
@@ -57,36 +58,36 @@ namespace Clout.Host.IntegrationTests
             var payload = Encoding.UTF8.GetBytes("hello world");
             using var form = new MultipartFormDataContent();
             using var stream = new MemoryStream(payload);
-            var file = new StreamContent(stream);
+            using var file = new StreamContent(stream);
             file.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
             form.Add(file, "file", "hello.txt");
-            HttpResponseMessage up = await client.PostAsync("/api/blobs", form).ConfigureAwait(false);
+            HttpResponseMessage up = await client.PostAsync(new Uri("/api/blobs", UriKind.Relative), form);
             if (up.StatusCode != HttpStatusCode.Created)
             {
-                _output.WriteLine("Upload body: " + await up.Content.ReadAsStringAsync().ConfigureAwait(false));
+                _output.WriteLine("Upload body: " + await up.Content.ReadAsStringAsync());
             }
             Assert.Equal(HttpStatusCode.Created, up.StatusCode);
-            BlobInfo? info = await up.Content.ReadFromJsonAsync<BlobInfo>().ConfigureAwait(false);
+            BlobInfo? info = await up.Content.ReadFromJsonAsync<BlobInfo>();
             Assert.NotNull(info);
             Assert.Equal("hello.txt", info!.FileName);
 
             // info
-            BlobInfo? meta = await client.GetFromJsonAsync<BlobInfo>($"/api/blobs/{info.Id}/info").ConfigureAwait(false);
+            BlobInfo? meta = await client.GetFromJsonAsync<BlobInfo>(new Uri($"/api/blobs/{info.Id}/info", UriKind.Relative));
             Assert.NotNull(meta);
             Assert.Equal(info.Id, meta!.Id);
 
             // download
-            HttpResponseMessage dl = await client.GetAsync($"/api/blobs/{info.Id}").ConfigureAwait(false);
+            HttpResponseMessage dl = await client.GetAsync(new Uri($"/api/blobs/{info.Id}", UriKind.Relative));
             Assert.Equal(HttpStatusCode.OK, dl.StatusCode);
-            var bytes = await dl.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var bytes = await dl.Content.ReadAsByteArrayAsync();
             Assert.Equal(payload, bytes);
 
             // delete
-            HttpResponseMessage del = await client.DeleteAsync($"/api/blobs/{info.Id}").ConfigureAwait(false);
+            HttpResponseMessage del = await client.DeleteAsync(new Uri($"/api/blobs/{info.Id}", UriKind.Relative));
             Assert.Equal(HttpStatusCode.NoContent, del.StatusCode);
 
             // verify not found after delete
-            HttpResponseMessage after = await client.GetAsync($"/api/blobs/{info.Id}/info").ConfigureAwait(false);
+            HttpResponseMessage after = await client.GetAsync(new Uri($"/api/blobs/{info.Id}/info", UriKind.Relative));
             Assert.Equal(HttpStatusCode.NotFound, after.StatusCode);
         }
 
@@ -101,12 +102,12 @@ namespace Clout.Host.IntegrationTests
             var payload = Encoding.UTF8.GetBytes("m");
             using var form = new MultipartFormDataContent();
             using var stream = new MemoryStream(payload);
-            var file = new StreamContent(stream);
+            using var file = new StreamContent(stream);
             file.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
             form.Add(file, "file", "meta.txt");
-            HttpResponseMessage up = await client.PostAsync("/api/blobs", form).ConfigureAwait(false);
+            HttpResponseMessage up = await client.PostAsync(new Uri("/api/blobs", UriKind.Relative), form);
             Assert.Equal(HttpStatusCode.Created, up.StatusCode);
-            BlobInfo? info = await up.Content.ReadFromJsonAsync<BlobInfo>().ConfigureAwait(false);
+            BlobInfo? info = await up.Content.ReadFromJsonAsync<BlobInfo>();
             Assert.NotNull(info);
 
             // set metadata
@@ -115,20 +116,20 @@ namespace Clout.Host.IntegrationTests
                 new("author", "text/plain", "alice"),
                 new("tags", "application/json", "[\"a\",\"b\"]"),
             };
-            HttpResponseMessage put = await client.PutAsJsonAsync($"/api/blobs/{info!.Id}/metadata", newMeta).ConfigureAwait(false);
+            HttpResponseMessage put = await client.PutAsJsonAsync(new Uri($"/api/blobs/{info!.Id}/metadata", UriKind.Relative), newMeta);
             if (!put.IsSuccessStatusCode)
             {
-                var body = await put.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var body = await put.Content.ReadAsStringAsync();
                 Assert.Fail($"Failed to set metadata: {put.StatusCode} {body}");
             }
-            BlobInfo? after = await put.Content.ReadFromJsonAsync<BlobInfo>().ConfigureAwait(false);
+            BlobInfo? after = await put.Content.ReadFromJsonAsync<BlobInfo>();
             Assert.NotNull(after);
             Assert.Equal(2, after!.Metadata.Count);
             Assert.Contains(after.Metadata, m => m.Name == "author" && m.Value == "alice" && m.ContentType == "text/plain");
             Assert.Contains(after.Metadata, m => m.Name == "tags" && m.ContentType == "application/json");
 
             // verify via info endpoint
-            BlobInfo? meta = await client.GetFromJsonAsync<BlobInfo>($"/api/blobs/{info.Id}/info").ConfigureAwait(false);
+            BlobInfo? meta = await client.GetFromJsonAsync<BlobInfo>(new Uri($"/api/blobs/{info.Id}/info", UriKind.Relative));
             Assert.NotNull(meta);
             Assert.Equal(2, meta!.Metadata.Count);
         }

@@ -1,4 +1,4 @@
-namespace Cloud.Shared.Models;
+namespace Clout.Shared.Models;
 
 /// <summary>
 /// Describes a stored blob and its metadata.
@@ -34,7 +34,7 @@ public record BlobInfo
     /// Arbitrary metadata entries associated with this blob.
     /// Each entry carries a name, content type, and string value.
     /// </summary>
-    public List<BlobMetadata> Metadata { get; init; } = new();
+    public IReadOnlyList<BlobMetadata> Metadata { get; init; } = new List<BlobMetadata>();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BlobInfo"/> record.

@@ -1,5 +1,5 @@
-﻿using Cloud.Shared;
-using Cloud.Shared.Models;
+using Clout.Shared;
+using Clout.Shared.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
@@ -18,7 +18,7 @@ public partial class Blobs
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAsync();
+        await LoadAsync().ConfigureAwait(true);
     }
 
     private async Task LoadAsync()
@@ -28,13 +28,17 @@ public partial class Blobs
             _loading = true;
             _error = null;
             _blobs.Clear();
-            var items = await Api.ListAsync();
+            var items = await Api.ListAsync().ConfigureAwait(true);
             _blobs.AddRange(items
                 .OrderByDescending(b => b.CreatedUtc)
                 .Select(ToRow));
             ApplyFilter();
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (IOException ex)
         {
             _error = ex.Message;
         }
@@ -73,8 +77,8 @@ public partial class Blobs
     {
         try
         {
-            if (!await Confirm($"Delete blob {id}?")) return;
-            if (await Api.DeleteAsync(id))
+            if (!await Confirm($"Delete blob {id}?").ConfigureAwait(true)) return;
+            if (await Api.DeleteAsync(id).ConfigureAwait(true))
             {
                 var idx = _blobs.FindIndex(b => b.Id == id);
                 if (idx >= 0) _blobs.RemoveAt(idx);
@@ -82,7 +86,11 @@ public partial class Blobs
                 ShowToast("Blob deleted.");
             }
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (IOException ex)
         {
             _error = ex.Message;
         }
@@ -90,7 +98,7 @@ public partial class Blobs
 
     private bool _metaOpen;
     private string _metaTitle = string.Empty;
-    private List<BlobMetadata> _meta = new();
+    private IReadOnlyList<BlobMetadata> _meta = Array.Empty<BlobMetadata>();
     private string _metaBlobId = string.Empty;
     private bool _metaEdit;
     private List<EditMetaRow> _metaEditList = new();
@@ -100,7 +108,7 @@ public partial class Blobs
         try
         {
             _error = null;
-            var info = await Api.GetInfoAsync(id);
+            var info = await Api.GetInfoAsync(id).ConfigureAwait(true);
             if (info is null)
             {
                 _error = "Blob not found";
@@ -109,11 +117,15 @@ public partial class Blobs
 
             _metaBlobId = info.Id;
             _metaTitle = $"Metadata: {info.FileName} ({info.Id})";
-            _meta = info.Metadata ?? new List<BlobMetadata>();
+            _meta = info.Metadata ?? Array.Empty<BlobMetadata>();
             _metaOpen = true;
             _metaEdit = false;
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (IOException ex)
         {
             _error = ex.Message;
         }
@@ -141,8 +153,8 @@ public partial class Blobs
                     string.IsNullOrWhiteSpace(m.ContentType) ? "text/plain" : m.ContentType.Trim(),
                     m.Value ?? string.Empty))
                 .ToList();
-            var updated = await Api.SetMetadataAsync(_metaBlobId, payload);
-            _meta = updated.Metadata ?? new List<BlobMetadata>();
+            var updated = await Api.SetMetadataAsync(_metaBlobId, payload).ConfigureAwait(true);
+            _meta = updated.Metadata ?? Array.Empty<BlobMetadata>();
             _metaEdit = false;
             var row = _blobs.FirstOrDefault(b => b.Id == _metaBlobId);
             if (row is not null)
@@ -153,7 +165,11 @@ public partial class Blobs
 
             ShowToast("Metadata saved.");
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (IOException ex)
         {
             _error = ex.Message;
         }
@@ -225,9 +241,13 @@ public partial class Blobs
         {
             try
             {
-                await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+                await JS.InvokeVoidAsync("navigator.clipboard.writeText", text).ConfigureAwait(true);
             }
-            catch
+            catch (JSException)
+            {
+                /* ignore */
+            }
+            catch (InvalidOperationException)
             {
                 /* ignore */
             }
@@ -238,9 +258,13 @@ public partial class Blobs
     {
         try
         {
-            return await JS.InvokeAsync<bool>("confirm", message);
+            return await JS.InvokeAsync<bool>("confirm", message).ConfigureAwait(true);
         }
-        catch
+        catch (JSException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
         {
             return true;
         }
@@ -265,8 +289,8 @@ public partial class Blobs
 
     private async Task HideToastAfterDelay()
     {
-        await Task.Delay(2500);
+        await Task.Delay(2500).ConfigureAwait(true);
         _toastVisible = false;
-        await InvokeAsync(StateHasChanged);
+        await InvokeAsync(StateHasChanged).ConfigureAwait(true);
     }
 }

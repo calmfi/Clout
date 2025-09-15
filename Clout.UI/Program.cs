@@ -3,7 +3,7 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace Clout.UI
 {
-    internal class Program
+    internal sealed class Program
     {
         public static void Main(string[] args)
         {
@@ -16,7 +16,7 @@ namespace Clout.UI
 
             // Register API client for the Local Cloud API
             var apiBase = Environment.GetEnvironmentVariable("CLOUT_API") ?? "http://localhost:5000";
-            _ = builder.Services.AddSingleton(new Cloud.Shared.BlobApiClient(apiBase));
+            _ = builder.Services.AddSingleton(_ => new Clout.Shared.BlobApiClient(apiBase));
             _ = builder.Services.AddSingleton(new AppConfig(apiBase));
 
             WebApplication app = builder.Build();

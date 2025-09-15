@@ -9,7 +9,7 @@ Clout.slnx
 ├─ API/
 │  └─ Clout.Host/            # Project: Clout.Host (ASP.NET Core Minimal API)
 ├─ Shared/
-│  └─ Cloud.Shared/          # Shared contracts (BlobInfo, BlobMetadata, IBlobStorage)
+│  └─ Clout.Shared/          # Shared contracts (BlobInfo, BlobMetadata, IBlobStorage)
 └─ Tests/
    └─ Clout.Host.IntegrationTests/ # Integration tests for API (folder: tests/Clout.Api.IntegrationTests)
 ```

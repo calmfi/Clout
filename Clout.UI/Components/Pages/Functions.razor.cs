@@ -1,5 +1,5 @@
-﻿using Cloud.Shared;
-using Cloud.Shared.Models;
+using Clout.Shared;
+using Clout.Shared.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
@@ -9,6 +9,7 @@ namespace Clout.UI.Components.Pages;
 
 public partial class Functions
 {
+    private static readonly string[] NameSplitSeparators = new[] { ",", ";", "\n", "\r" };
     private readonly List<FunctionRow> _functions = new();
     private List<FunctionRow> _view = new();
     private bool _loading;
@@ -20,7 +21,7 @@ public partial class Functions
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAsync();
+        await LoadAsync().ConfigureAwait(true);
         // Pre-fill register-many dialog if query contains from=<id>
         var uri = new Uri(Nav.Uri);
         var qs = System.Web.HttpUtility.ParseQueryString(uri.Query);
@@ -39,13 +40,13 @@ public partial class Functions
             _loading = true;
             _error = null;
             _functions.Clear();
-            var items = await Api.ListAsync();
+            var items = await Api.ListAsync().ConfigureAwait(true);
             _functions.AddRange(items.Where(IsFunction)
                 .Select(ToRow)
                 .OrderByDescending(r => r.CreatedUtc));
             ApplyFilter();
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
             _error = ex.Message;
         }
@@ -127,13 +128,13 @@ public partial class Functions
     {
         try
         {
-            if (!await Confirm($"Unschedule TimerTrigger for {r.Name} ({r.Id})?")) return;
-            var updated = await Api.ClearTimerTriggerAsync(r.Id);
+            if (!await Confirm($"Unschedule TimerTrigger for {r.Name} ({r.Id})?").ConfigureAwait(true)) return;
+            var updated = await Api.ClearTimerTriggerAsync(r.Id).ConfigureAwait(true);
             r.TimerTrigger = string.Empty;
             StateHasChanged();
             ShowToast("Function unscheduled.");
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
             _error = ex.Message;
         }
@@ -143,8 +144,8 @@ public partial class Functions
     {
         try
         {
-            if (!await Confirm($"Unregister function (delete blob) {id}?")) return;
-            if (await Api.DeleteAsync(id))
+            if (!await Confirm($"Unregister function (delete blob) {id}?").ConfigureAwait(true)) return;
+            if (await Api.DeleteAsync(id).ConfigureAwait(true))
             {
                 var idx = _functions.FindIndex(b => b.Id == id);
                 if (idx >= 0) _functions.RemoveAt(idx);
@@ -152,7 +153,7 @@ public partial class Functions
                 ShowToast("Function unregistered.");
             }
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
             _error = ex.Message;
         }
@@ -164,9 +165,13 @@ public partial class Functions
     {
         try
         {
-            return await JS.InvokeAsync<bool>("confirm", message);
+            return await JS.InvokeAsync<bool>("confirm", message).ConfigureAwait(true);
         }
-        catch
+        catch (JSException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
         {
             return true;
         }
@@ -184,9 +189,9 @@ public partial class Functions
 
     private async Task HideToastAfterDelay()
     {
-        await Task.Delay(2500);
+        await Task.Delay(2500).ConfigureAwait(true);
         _toastVisible = false;
-        await InvokeAsync(StateHasChanged);
+        await InvokeAsync(StateHasChanged).ConfigureAwait(true);
     }
 
     private bool _schedOpen;
@@ -226,7 +231,7 @@ public partial class Functions
                 return;
             }
 
-            var updated = await Api.SetTimerTriggerAsync(_schedId, _schedCron);
+            var updated = await Api.SetTimerTriggerAsync(_schedId, _schedCron).ConfigureAwait(true);
             var row = _functions.FirstOrDefault(f => f.Id == _schedId);
             if (row is not null)
             {
@@ -237,7 +242,7 @@ public partial class Functions
             _schedOpen = false;
             ShowToast("Function scheduled.");
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
             _schedError = ex.Message;
         }
@@ -291,9 +296,12 @@ public partial class Functions
 
         try
         {
-            _cronPreview.AddRange(await Api.CronNextAsync(expr, 5));
+            _cronPreview.AddRange(await Api.CronNextAsync(expr, 5).ConfigureAwait(true));
         }
-        catch
+        catch (HttpRequestException)
+        {
+        }
+        catch (ArgumentException)
         {
         }
 
@@ -303,7 +311,7 @@ public partial class Functions
     private void SyncRowsFromNames()
     {
         var set = new HashSet<string>(_rows.Select(r => r.Name), StringComparer.OrdinalIgnoreCase);
-        foreach (var n in (_regNames ?? string.Empty).Split(new[] { ',', ';', '\n', '\r' },
+        foreach (var n in (_regNames ?? string.Empty).Split(NameSplitSeparators,
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (set.Contains(n)) continue;
@@ -358,7 +366,7 @@ public partial class Functions
                 return;
             }
 
-            var count = await Api.ScheduleAllAsync(_reAllSourceId, _reAllCron);
+            var count = await Api.ScheduleAllAsync(_reAllSourceId, _reAllCron).ConfigureAwait(true);
             foreach (var f in _functions.Where(f =>
                          string.Equals(f.SourceId, _reAllSourceId, StringComparison.OrdinalIgnoreCase)))
             {
@@ -369,7 +377,7 @@ public partial class Functions
             _reAllOpen = false;
             ShowToast($"Rescheduled {count} functions.");
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
             _reAllError = ex.Message;
         }
@@ -379,8 +387,8 @@ public partial class Functions
     {
         try
         {
-            if (!await Confirm($"Unschedule all functions from DLL {sourceId}?")) return;
-            var count = await Api.UnscheduleAllAsync(sourceId);
+            if (!await Confirm($"Unschedule all functions from DLL {sourceId}?").ConfigureAwait(true)) return;
+            var count = await Api.UnscheduleAllAsync(sourceId).ConfigureAwait(true);
             foreach (var f in _functions.Where(f =>
                          string.Equals(f.SourceId, sourceId, StringComparison.OrdinalIgnoreCase)))
             {
@@ -390,7 +398,7 @@ public partial class Functions
             ApplyFilter();
             ShowToast($"Unscheduled {count} functions.");
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
             _error = ex.Message;
         }
@@ -408,7 +416,7 @@ public partial class Functions
             }
 
             var names = (_regNames ?? string.Empty)
-                .Split(new[] { ",", ";", "\n", "\r" },
+                .Split(NameSplitSeparators,
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -444,13 +452,13 @@ public partial class Functions
             if (!string.IsNullOrWhiteSpace(_regExistingId))
             {
                 result = await Api.RegisterFunctionsFromExistingAsync(_regExistingId!, names, _regRuntime,
-                    _perRow ? null : _regCron);
+                    _perRow ? null : _regCron).ConfigureAwait(true);
             }
             else
             {
-                await using var stream = _regFile.OpenReadStream(50 * 1024 * 1024); // 50 MB limit
-                result = await Api.RegisterFunctionsAsync(stream, _regFile.Name, names, _regRuntime,
-                    _perRow ? null : _regCron);
+                using var stream = _regFile!.OpenReadStream(50 * 1024 * 1024); // 50 MB limit
+                result = await Api.RegisterFunctionsAsync(stream, _regFile!.Name, names, _regRuntime,
+                    _perRow ? null : _regCron).ConfigureAwait(true);
             }
 
             if (_perRow && result.Count == names.Length)
@@ -463,9 +471,12 @@ public partial class Functions
                     {
                         try
                         {
-                            await Api.SetTimerTriggerAsync(result[i].Id, c);
+                            await Api.SetTimerTriggerAsync(result[i].Id, c).ConfigureAwait(true);
                         }
-                        catch
+                        catch (HttpRequestException)
+                        {
+                        }
+                        catch (ArgumentException)
                         {
                         }
                     }
@@ -474,9 +485,9 @@ public partial class Functions
 
             _regOpen = false;
             ShowToast($"Registered {result.Count} functions.");
-            await LoadAsync();
+            await LoadAsync().ConfigureAwait(true);
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
             _regError = ex.Message;
         }

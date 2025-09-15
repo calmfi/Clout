@@ -1,6 +1,6 @@
-using Cloud.Shared.Models;
+using Clout.Shared.Models;
 
-namespace Cloud.Shared.Abstractions;
+namespace Clout.Shared.Abstractions;
 
 /// <summary>
 /// Abstraction for blob storage operations.

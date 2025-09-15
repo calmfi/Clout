@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - API: Project `Clout.Host` (path: `Clout.Host/Clout.Host.csproj`) - ASP.NET Core Minimal API exposing local blob storage with Swagger.
 - Client: `Clout.Client/` - Console client for the API (upload, list, info, download, delete).
-- Shared: `Cloud.Shared/` - Contracts and abstractions shared across projects (e.g., `BlobInfo`, `IBlobStorage`).
+- Shared: `Clout.Shared/` - Contracts and abstractions shared across projects (e.g., `BlobInfo`, `IBlobStorage`).
 - Build artifacts: `**/bin/`, `**/obj/` (ignored). IDE cache: `.vs/` (ignored).
 - Solutions: lightweight `Clout.slnx` only. Do not use or add `.sln` files.
 
@@ -21,8 +21,8 @@
 - Prefer `var` when the type is obvious; avoid abbreviations.
 
 ## Shared Contracts
-- Place cross-project interfaces and models in `Cloud.Shared/` (e.g., `BlobInfo`, `IBlobStorage`).
-- Reference `Cloud.Shared` from any project that needs these types; do not duplicate contracts locally.
+- Place cross-project interfaces and models in `Clout.Shared/` (e.g., `BlobInfo`, `IBlobStorage`).
+- Reference `Clout.Shared` from any project that needs these types; do not duplicate contracts locally.
 - When changing a shared type, ensure all consumers compile and behavior is documented. Update XML docs and examples if shape changes.
 - Consider backward compatibility: add fields as optional when feasible, avoid breaking renames without coordinating client/API changes.
 

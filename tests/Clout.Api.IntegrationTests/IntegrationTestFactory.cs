@@ -10,6 +10,7 @@ public class IntegrationTestFactory : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        System.ArgumentNullException.ThrowIfNull(builder);
         builder.ConfigureAppConfiguration((ctx, config) =>
         {
             var settings = new Dictionary<string, string?>

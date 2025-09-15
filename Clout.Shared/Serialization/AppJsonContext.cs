@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
-using Cloud.Shared.Models;
+using Clout.Shared.Models;
 
-namespace Cloud.Shared;
+namespace Clout.Shared;
 
 /// <summary>
 /// Provides a source-generated JSON serialization context for the application.
@@ -15,5 +15,6 @@ namespace Cloud.Shared;
 [JsonSerializable(typeof(BlobMetadata))]
 [JsonSerializable(typeof(List<BlobMetadata>))]
 [JsonSerializable(typeof(IEnumerable<BlobMetadata>))]
+[JsonSerializable(typeof(IReadOnlyList<BlobMetadata>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 public partial class AppJsonContext : JsonSerializerContext { }
