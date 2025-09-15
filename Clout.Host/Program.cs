@@ -17,10 +17,20 @@ builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo
     {
-        Title = "Clout Host API",
+        Title = "Clout API",
         Version = "v1",
-        Description = "Simple API for creating, listing, downloading, updating, and deleting file blobs, registering and unregistering .NET Core functions and working with queue."
+        Description = "Local API for blob storage, function registration/scheduling, and a lightweight disk-backed queue."
     });
+
+    // Include XML docs from built assemblies to enrich Swagger
+    try
+    {
+        foreach (var xml in Directory.GetFiles(AppContext.BaseDirectory, "*.xml"))
+        {
+            c.IncludeXmlComments(xml, includeControllerXmlComments: true);
+        }
+    }
+    catch { /* best-effort */ }
 });
 
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");

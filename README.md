@@ -31,6 +31,56 @@ Clout.slnx
 
 Tip: Under Aspire, the UI discovers the API dynamically (default base `http://clout-host`). For the console client, pass `--api <url>` when targeting a non-default API URL.
 
+**Queue API** is now hosted inside `Clout.Host` (no separate `Clout.Queue` service). Endpoints appear in Swagger and share the same base URL.
+
+## Queue API
+
+- Health
+  - `GET /health` — returns `OK`.
+  - `GET /health/queues` — returns current queue stats.
+- AMQP-like
+  - `GET /amqp/queues` — list queues with stats.
+  - `POST /amqp/queues/{name}` — create a queue (idempotent; 201).
+  - `POST /amqp/queues/{name}/purge` — purge all messages.
+  - `POST /amqp/queues/{name}/messages` — enqueue JSON body.
+  - `POST /amqp/queues/{name}/dequeue?timeoutMs=...` — dequeue one message, optional timeout.
+
+Examples (PowerShell):
+
+```
+# Create a queue
+irm -Method Post http://localhost:5000/amqp/queues/demo
+
+# Enqueue a JSON message
+Invoke-RestMethod -Method Post -ContentType 'application/json' \
+  -Body '{"hello":"world"}' \
+  -Uri http://localhost:5000/amqp/queues/demo/messages
+
+# Dequeue (wait up to 5 seconds)
+irm -Method Post 'http://localhost:5000/amqp/queues/demo/dequeue?timeoutMs=5000'
+
+# Stats
+irm http://localhost:5000/health/queues
+```
+
+### Queue Configuration
+
+- Configure via configuration key prefix `Queue:` (environment variables or configuration providers):
+  - `Queue:BasePath` — base directory for queue data. If relative, resolved under `AppContext.BaseDirectory`.
+  - `Queue:MaxQueueBytes` — per-queue max total bytes (optional).
+  - `Queue:MaxQueueMessages` — per-queue max message count (optional).
+  - `Queue:MaxMessageBytes` — per-message max size (optional).
+  - `Queue:Overflow` — `Reject` (default) or `DropOldest` when quotas exceed.
+  - `Queue:CleanupOrphansOnLoad` — `true`/`false` to delete stray `*.bin` files not referenced by state.
+
+Example (Windows PowerShell):
+
+```
+$env:Queue__BasePath = 'queue-data'
+$env:Queue__MaxQueueMessages = '10000'
+dotnet run --project Clout.Host/Clout.Host.csproj
+```
+
 ## Function Registration API
 
 - Endpoint: `POST /api/functions/register`
