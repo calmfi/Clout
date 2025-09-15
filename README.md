@@ -18,6 +18,7 @@ Clout.slnx
 
 - Restore/build all: `dotnet build`
 - Run API: `dotnet run --project Clout.Host/Clout.Host.csproj` (Swagger at `/swagger`)
+- Run with Aspire (AppHost): `dotnet run --project Clout.AppHost` (UI + API with service discovery)
 - Run client: `dotnet run --project Clout.Client -- <cmd>`
   - Blob commands (grouped under `blob`):
     - `blob list`, `blob info <id>`, `blob upload <path>`, `blob download <id> <dest>`, `blob delete <id>`,
@@ -28,7 +29,7 @@ Clout.slnx
       `functions cron-next <ncrontab> [count=5]`
 - Test API: `dotnet test tests/Clout.Api.IntegrationTests/Clout.Host.IntegrationTests.csproj`
 
-Tip: Set `CLOUT_API` to point the client at a non-default base URL (default `http://localhost:5000`).
+Tip: Under Aspire, the UI discovers the API dynamically (default base `http://clout-host`). For the console client, pass `--api <url>` when targeting a non-default API URL.
 
 ## Function Registration API
 

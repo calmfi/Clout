@@ -7,13 +7,35 @@ using Clout.Shared.Models;
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 CancellationToken ct = cts.Token;
+
+// Optional: --api <url> to set API base address
+string? apiOpt = null;
+{
+    var list = args.ToList();
+    for (int i = 0; i < list.Count; i++)
+    {
+        var tok = list[i];
+        if (string.Equals(tok, "--api", StringComparison.OrdinalIgnoreCase) || string.Equals(tok, "-a", StringComparison.OrdinalIgnoreCase))
+        {
+            if (i + 1 >= list.Count)
+            {
+                return Fail("Missing value after --api");
+            }
+            apiOpt = list[i + 1];
+            list.RemoveAt(i + 1);
+            list.RemoveAt(i);
+            break;
+        }
+    }
+    args = list.ToArray();
+}
 if (args.Length == 0)
 {
     PrintUsage();
     return 1;
 }
 
-var apiBase = Environment.GetEnvironmentVariable("CLOUT_API") ?? "http://localhost:5000";
+var apiBase = apiOpt ?? "http://localhost:5000";
 var client = new BlobApiClient(apiBase);
 
 try
@@ -403,6 +425,6 @@ void PrintUsage()
     Console.WriteLine("  clout functions unschedule <id>");
     Console.WriteLine("  clout functions cron-next <ncrontab> [count=5]");
     Console.WriteLine();
-    Console.WriteLine("Set API base with CLOUT_API (default http://localhost:5000)");
+    Console.WriteLine("Optional: --api <url> to set API base (default http://localhost:5000)");
 }
 // Types moved to separate files.

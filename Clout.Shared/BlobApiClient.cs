@@ -12,6 +12,7 @@ namespace Clout.Shared;
 public sealed class BlobApiClient : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly bool _ownsHttpClient;
     /// <summary>
     /// Initializes a new client with the specified API base address.
     /// </summary>
@@ -19,13 +20,28 @@ public sealed class BlobApiClient : IDisposable
     public BlobApiClient(string baseAddress)
     {
         _http = new HttpClient { BaseAddress = new Uri(baseAddress) };
+        _ownsHttpClient = true;
+    }
+
+    /// <summary>
+    /// Initializes a new client using an externally managed HttpClient.
+    /// The HttpClient's BaseAddress should be set by the caller.
+    /// </summary>
+    /// <param name="http">Configured HttpClient instance.</param>
+    public BlobApiClient(HttpClient http)
+    {
+        _http = http;
+        _ownsHttpClient = false;
     }
     /// <summary>
     /// Disposes underlying HTTP resources.
     /// </summary>
     public void Dispose()
     {
-        _http.Dispose();
+        if (_ownsHttpClient)
+        {
+            _http.Dispose();
+        }
     }
 
     /// <summary>

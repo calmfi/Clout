@@ -45,7 +45,7 @@
 
 ## Security & Configuration Tips
 - Never commit secrets. Use environment variables or user-secrets for local config.
-- Client base URL via `CLOUT_API` (default `http://localhost:5000`).
+// Client base URL: pass `--api <url>` to the console client when targeting a non-default API; the default is `http://localhost:5000`. The UI discovers the API under Aspire.
 - Storage lives under the API’s `storage/` folder in the runtime output path.
 
 ## Agent-Specific Instructions

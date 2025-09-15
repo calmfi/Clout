@@ -16,10 +16,13 @@ namespace Clout.UI
                 .AddInteractiveServerComponents();
             _ = builder.Services.AddFluentUIComponents();
 
-            // Register API client for the Local Cloud API
-            var apiBase = Environment.GetEnvironmentVariable("CLOUT_API") ?? "http://localhost:5000";
-            _ = builder.Services.AddSingleton(_ => new Clout.Shared.BlobApiClient(apiBase));
-            _ = builder.Services.AddSingleton(new AppConfig(apiBase));
+            // Register API client using Aspire service discovery
+            var apiBase = ResolveApiBase();
+            _ = builder.Services.AddHttpClient<Clout.Shared.BlobApiClient>(client =>
+            {
+                client.BaseAddress = new Uri(apiBase.clientBase);
+            });
+            _ = builder.Services.AddSingleton(new AppConfig(apiBase.linkBase));
 
             WebApplication app = builder.Build();
 
@@ -42,6 +45,42 @@ namespace Clout.UI
                 .AddInteractiveServerRenderMode();
 
             app.Run();
+        }
+
+        private static (string clientBase, string linkBase) ResolveApiBase()
+        {
+            // Try to discover Aspire-provided endpoint env vars for the referenced service
+            // Common pattern: services__<name>__http__0 or services__<name>__https__0
+            // Prefer https if present
+            var env = Environment.GetEnvironmentVariables();
+            string? https = null;
+            string? http = null;
+            foreach (System.Collections.DictionaryEntry entry in env)
+            {
+                var key = entry.Key as string;
+                if (string.IsNullOrEmpty(key)) continue;
+                var val = entry.Value as string;
+                if (string.IsNullOrEmpty(val)) continue;
+                if (key.StartsWith("services__clout-host__https__", StringComparison.OrdinalIgnoreCase))
+                {
+                    https ??= val;
+                }
+                else if (key.StartsWith("services__clout-host__http__", StringComparison.OrdinalIgnoreCase))
+                {
+                    http ??= val;
+                }
+            }
+
+            var discovered = https ?? http;
+            if (!string.IsNullOrWhiteSpace(discovered))
+            {
+                // Use discovered absolute for both client + browser links
+                return (discovered!, discovered!);
+            }
+
+            // Fallback: let HttpClient resolve via service discovery; links use same base
+            const string serviceNameBase = "http://clout-host";
+            return (serviceNameBase, serviceNameBase);
         }
     }
 }
