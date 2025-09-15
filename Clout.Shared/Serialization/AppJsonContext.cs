@@ -17,4 +17,7 @@ namespace Clout.Shared;
 [JsonSerializable(typeof(IEnumerable<BlobMetadata>))]
 [JsonSerializable(typeof(IReadOnlyList<BlobMetadata>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(QueueStats))]
+[JsonSerializable(typeof(List<QueueStats>))]
+[JsonSerializable(typeof(System.Text.Json.JsonElement))]
 public partial class AppJsonContext : JsonSerializerContext { }

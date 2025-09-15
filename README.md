@@ -178,3 +178,13 @@ dotnet run --project Clout.Client -- blob metadata set <blobId> author text/plai
 ```
 
 - The sample exposes a public method `Ping` in `Sample.Function.dll`. The registration script uses the client to upload the DLL and schedule it with NCRONTAB `*/10 * * * * *`.
+
+## Queue CLI Usage examples
+
+  - dotnet run --project Clout.Client -- queue list
+  - dotnet run --project Clout.Client -- queue create demo
+  - dotnet run --project Clout.Client -- queue enqueue demo "hello world"
+  - dotnet run --project Clout.Client -- queue enqueue demo "{\"x\":1}" --as-json
+  - dotnet run --project Clout.Client -- queue enqueue-file demo .\\payload.json application/json
+  - dotnet run --project Clout.Client -- queue enqueue-file demo .\\image.png image/png
+  - dotnet run --project Clout.Client -- queue dequeue demo --timeout-ms 5000

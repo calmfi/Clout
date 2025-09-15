@@ -146,6 +146,89 @@ try
                         return Fail("Supported blob ops: list|info|upload|download|delete|metadata");
                 }
             }
+        case "queue":
+            {
+                if (args.Length < 2)
+                {
+                    return Fail("Usage: queue <list|create|purge|enqueue|enqueue-file|dequeue>");
+                }
+                var action = args[1].ToLowerInvariant();
+                switch (action)
+                {
+                    case "list":
+                        {
+                            var stats = await client.ListQueuesAsync(ct).ConfigureAwait(false);
+                            foreach (var s in stats)
+                            {
+                                Console.WriteLine($"{s.Name}\t{s.MessageCount} msgs\t{s.TotalBytes} bytes");
+                            }
+                            return 0;
+                        }
+                    case "create":
+                        {
+                            if (args.Length < 3) return Fail("Usage: queue create <name>");
+                            await client.CreateQueueAsync(args[2], ct).ConfigureAwait(false);
+                            Console.WriteLine("Created.");
+                            return 0;
+                        }
+                    case "purge":
+                        {
+                            if (args.Length < 3) return Fail("Usage: queue purge <name>");
+                            await client.PurgeQueueAsync(args[2], ct).ConfigureAwait(false);
+                            Console.WriteLine("Purged.");
+                            return 0;
+                        }
+                    case "enqueue":
+                        {
+                            if (args.Length < 4) return Fail("Usage: queue enqueue <name> <message> [--as-json]");
+                            var name = args[2];
+                            var msg = args[3];
+                            var asJson = false;
+                            for (int i = 4; i < args.Length; i++)
+                            {
+                                if (string.Equals(args[i], "--as-json", StringComparison.OrdinalIgnoreCase)) asJson = true;
+                            }
+                            await client.EnqueueStringAsync(name, msg, asJson, ct).ConfigureAwait(false);
+                            Console.WriteLine("Enqueued.");
+                            return 0;
+                        }
+                    case "enqueue-file":
+                        {
+                            if (args.Length < 5) return Fail("Usage: queue enqueue-file <name> <filePath> <content-type>");
+                            var name = args[2];
+                            var file = args[3];
+                            var contentType = args[4];
+                            await client.EnqueueFileAsync(name, file, contentType, ct).ConfigureAwait(false);
+                            Console.WriteLine("Enqueued file.");
+                            return 0;
+                        }
+                    case "dequeue":
+                        {
+                            if (args.Length < 3) return Fail("Usage: queue dequeue <name> [--timeout-ms <n>]");
+                            var name = args[2];
+                            int? timeoutMs = null;
+                            for (int i = 3; i < args.Length; i++)
+                            {
+                                if (string.Equals(args[i], "--timeout-ms", StringComparison.OrdinalIgnoreCase) || string.Equals(args[i], "-t", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (i + 1 >= args.Length) return Fail("Missing value after --timeout-ms");
+                                    if (!int.TryParse(args[++i], out var tmp)) return Fail("--timeout-ms must be an integer");
+                                    timeoutMs = tmp;
+                                }
+                            }
+                            var elem = await client.DequeueAsync(name, timeoutMs, ct).ConfigureAwait(false);
+                            if (elem is null)
+                            {
+                                Console.WriteLine("(no message)");
+                                return 0;
+                            }
+                            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(elem.Value, Clout.Shared.AppJsonContext.Default.JsonElement));
+                            return 0;
+                        }
+                    default:
+                        return Fail("Supported: queue list|create|purge|enqueue|enqueue-file|dequeue");
+                }
+            }
         case "functions":
             {
                 var action = args[1].ToLowerInvariant();

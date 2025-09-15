@@ -2,6 +2,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Clout.Shared.Models;
 using Quartz;
+using System.Text;
+using System.Text.Json;
 
 namespace Clout.Shared;
 
@@ -42,6 +44,104 @@ public sealed class BlobApiClient : IDisposable
         {
             _http.Dispose();
         }
+    }
+
+    // -------------------- Queue API --------------------
+    /// <summary>
+    /// Lists queues with stats.
+    /// </summary>
+    public async Task<List<QueueStats>> ListQueuesAsync(CancellationToken cancellationToken = default)
+    {
+        var items = await _http
+            .GetFromJsonAsync(new Uri("/amqp/queues", UriKind.Relative), AppJsonContext.Default.ListQueueStats, cancellationToken)
+            .ConfigureAwait(false);
+        return items ?? new List<QueueStats>();
+    }
+
+    /// <summary>
+    /// Creates a queue if it does not exist.
+    /// </summary>
+    public async Task CreateQueueAsync(string name, CancellationToken cancellationToken = default)
+    {
+        using var resp = await _http.PostAsync(new Uri($"/amqp/queues/{Uri.EscapeDataString(name)}", UriKind.Relative), content: null, cancellationToken).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Purges all messages from a queue.
+    /// </summary>
+    public async Task PurgeQueueAsync(string name, CancellationToken cancellationToken = default)
+    {
+        using var resp = await _http.PostAsync(new Uri($"/amqp/queues/{Uri.EscapeDataString(name)}/purge", UriKind.Relative), content: null, cancellationToken).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Enqueues a JSON message given as a JsonElement.
+    /// </summary>
+    public async Task EnqueueJsonAsync(string name, JsonElement message, CancellationToken cancellationToken = default)
+    {
+        using var resp = await _http.PostAsJsonAsync(new Uri($"/amqp/queues/{Uri.EscapeDataString(name)}/messages", UriKind.Relative), message, AppJsonContext.Default.JsonElement, cancellationToken).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Enqueues a message from a string. If <paramref name="asJson"/> is true, the string should be a JSON literal/object/array.
+    /// Otherwise it is sent as a JSON string value.
+    /// </summary>
+    public async Task EnqueueStringAsync(string name, string value, bool asJson = false, CancellationToken cancellationToken = default)
+    {
+        if (asJson)
+        {
+            using var doc = JsonDocument.Parse(value);
+            await EnqueueJsonAsync(name, doc.RootElement, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        // Send as JSON string
+        using var content = new StringContent(JsonSerializer.Serialize(value, AppJsonContext.Default.JsonElement.Options), Encoding.UTF8, "application/json");
+        using var resp = await _http.PostAsync(new Uri($"/amqp/queues/{Uri.EscapeDataString(name)}/messages", UriKind.Relative), content, cancellationToken).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Enqueues a file. If content type is application/json, the file content is parsed and sent as JSON.
+    /// Otherwise the file is wrapped into a JSON envelope with base64 data and provided contentType.
+    /// </summary>
+    public async Task EnqueueFileAsync(string name, string filePath, string contentType, CancellationToken cancellationToken = default)
+    {
+        if (string.Equals(contentType, "application/json", StringComparison.OrdinalIgnoreCase))
+        {
+            using var fs = File.OpenRead(filePath);
+            using var doc = await JsonDocument.ParseAsync(fs, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await EnqueueJsonAsync(name, doc.RootElement, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var bytes = await File.ReadAllBytesAsync(filePath, cancellationToken).ConfigureAwait(false);
+        var payload = new
+        {
+            contentType,
+            fileName = Path.GetFileName(filePath),
+            data = Convert.ToBase64String(bytes)
+        };
+        using var resp = await _http.PostAsJsonAsync(new Uri($"/amqp/queues/{Uri.EscapeDataString(name)}/messages", UriKind.Relative), payload, cancellationToken).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// Dequeues a message, optionally with a timeout in milliseconds. Returns null if no content.
+    /// </summary>
+    public async Task<JsonElement?> DequeueAsync(string name, int? timeoutMs = null, CancellationToken cancellationToken = default)
+    {
+        var suffix = timeoutMs is > 0 ? $"?timeoutMs={timeoutMs.Value}" : string.Empty;
+        using var resp = await _http.PostAsync(new Uri($"/amqp/queues/{Uri.EscapeDataString(name)}/dequeue{suffix}", UriKind.Relative), content: null, cancellationToken).ConfigureAwait(false);
+        if (resp.StatusCode == System.Net.HttpStatusCode.NoContent)
+        {
+            return null;
+        }
+        resp.EnsureSuccessStatusCode();
+        var doc = await resp.Content.ReadFromJsonAsync(AppJsonContext.Default.JsonElement, cancellationToken).ConfigureAwait(false);
+        return doc;
     }
 
     /// <summary>
