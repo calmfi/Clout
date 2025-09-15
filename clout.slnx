@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/Applications/">
     <Project Path="Clout.Host/Clout.Host.csproj" />
+    <Project Path="Clout.AppHost/Clout.AppHost.csproj" Id="b017fcf6-40ef-4ab9-8ef4-e41ff7329f3a" />
     <Project Path="Clout.Client/Clout.Client.csproj" />
     <Project Path="Clout.UI/Clout.UI.csproj" Id="9029138c-9c47-4d92-9915-e572c205f4c5" />
   </Folder>
   <Folder Name="/Common/">
+    <Project Path="Clout.ServiceDefaults/Clout.ServiceDefaults.csproj" Id="d21910ab-1278-4d0a-ab78-624761477f63" />
     <Project Path="Clout.Shared/Clout.Shared.csproj" />
   </Folder>
   <Folder Name="/Samples/">

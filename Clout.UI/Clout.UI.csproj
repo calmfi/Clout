@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Clout.ServiceDefaults\Clout.ServiceDefaults.csproj" />
     <ProjectReference Include="..\Clout.Shared\Clout.Shared.csproj" />
   </ItemGroup>
 </Project>

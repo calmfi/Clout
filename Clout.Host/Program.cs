@@ -9,6 +9,8 @@ using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.AddServiceDefaults();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -34,6 +36,8 @@ builder.Services.AddQuartzHostedService(opt =>
 
 builder.WebHost.UseUrls("http://localhost:5000");
 var app = builder.Build();
+
+app.MapDefaultEndpoints();
 
 app.UseSwagger();
 app.UseSwaggerUI();

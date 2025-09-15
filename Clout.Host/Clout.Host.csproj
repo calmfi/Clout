@@ -15,6 +15,7 @@
     <PackageReference Include="Quartz.AspNetCore" Version="3.15.0" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Clout.ServiceDefaults\Clout.ServiceDefaults.csproj" />
     <ProjectReference Include="..\Clout.Shared\Clout.Shared.csproj" />
   </ItemGroup>
 </Project>

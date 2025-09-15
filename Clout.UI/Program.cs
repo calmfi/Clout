@@ -8,6 +8,8 @@ namespace Clout.UI
         public static void Main(string[] args)
         {
             WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+            
+            _ = builder.AddServiceDefaults();
 
             // Add services to the container.
             _ = builder.Services.AddRazorComponents()
@@ -20,6 +22,8 @@ namespace Clout.UI
             _ = builder.Services.AddSingleton(new AppConfig(apiBase));
 
             WebApplication app = builder.Build();
+
+            app.MapDefaultEndpoints();
 
             // Configure the HTTP request pipeline.
             if (!app.Environment.IsDevelopment())
