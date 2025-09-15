@@ -1,0 +1,19 @@
+# Top-most EditorConfig file
+root = true
+
+[*.cs]
+dotnet_analyzer_diagnostic.severity = warning
+
+# Tighten unused code rules
+dotnet_diagnostic.CA1811.severity = error           # Avoid uncalled private code
+dotnet_diagnostic.IDE0051.severity = warning        # Remove unused private members
+dotnet_diagnostic.IDE0052.severity = warning        # Remove unread private members (fields)
+dotnet_diagnostic.CA1801.severity = warning         # Review unused parameters
+dotnet_diagnostic.CA1822.severity = suggestion      # Mark members as static
+
+# Style consistency (lightweight)
+dotnet_sort_system_directives_first = true
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+

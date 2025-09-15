@@ -258,72 +258,7 @@ internal class Program
                                 return Fail("Supported: functions register|register-many|register-from|register-many-from|schedule|unschedule");
                         }
                     }
-                case "metadata": // legacy: prefer 'blob metadata'
-                    {
-                        Console.Error.WriteLine("Hint: use 'blob metadata' instead (legacy alias in use).");
-                        if (args.Length < 3) return Fail("Usage: metadata set <id> <name> <content-type> <value> [<name> <content-type> <value> ...]");
-                        var action = args[1].ToLowerInvariant();
-                        if (action != "set") return Fail("Only 'metadata set' is supported.");
-                        var id = args[2];
-                        if (((args.Length - 3) % 3) != 0 || args.Length < 6)
-                            return Fail("Provide name/content-type/value triples after the id.");
-
-                        var list = new List<BlobMetadata>();
-                        for (int i = 3; i < args.Length; i += 3)
-                        {
-                            var name = args[i];
-                            var ctType = args[i + 1];
-                            var value = args[i + 2];
-                            list.Add(new BlobMetadata(name, ctType, value));
-                        }
-
-                        var updated = await client.SetMetadataAsync(id, list, ct);
-                        Console.WriteLine(JsonSerializer.Serialize(updated, AppJsonContext.Default.BlobInfo));
-                        return 0;
-                    }
-                case "list": // legacy: prefer 'blob list'
-                    {
-                        Console.Error.WriteLine("Hint: use 'blob list' instead (legacy alias in use).");
-                        var blobs = await client.ListAsync(ct);
-                        foreach (var b in blobs)
-                        {
-                            Console.WriteLine($"{b.Id}\t{b.Size} bytes\t{b.CreatedUtc:u}\t{b.FileName}");
-                        }
-                        return 0;
-                    }
-                case "info": // legacy: prefer 'blob info'
-                    {
-                        Console.Error.WriteLine("Hint: use 'blob info' instead (legacy alias in use).");
-                        if (args.Length < 2) return Fail("Usage: info <id>");
-                        var info = await client.GetInfoAsync(args[1], ct);
-                        if (info is null) return Fail("Not found");
-                        Console.WriteLine(JsonSerializer.Serialize(info, AppJsonContext.Default.BlobInfo));
-                        return 0;
-                    }
-                case "upload": // legacy: prefer 'blob upload'
-                    {
-                        Console.Error.WriteLine("Hint: use 'blob upload' instead (legacy alias in use).");
-                        if (args.Length < 2) return Fail("Usage: upload <filePath>");
-                        var result = await client.UploadAsync(args[1], cancellationToken: ct);
-                        Console.WriteLine($"Uploaded: {result.Id} -> {result.FileName} ({result.Size} bytes)");
-                        return 0;
-                    }
-                case "download": // legacy: prefer 'blob download'
-                    {
-                        Console.Error.WriteLine("Hint: use 'blob download' instead (legacy alias in use).");
-                        if (args.Length < 3) return Fail("Usage: download <id> <destPath>");
-                        await client.DownloadAsync(args[1], args[2], ct);
-                        Console.WriteLine("Downloaded.");
-                        return 0;
-                    }
-                case "delete": // legacy: prefer 'blob delete'
-                    {
-                        Console.Error.WriteLine("Hint: use 'blob delete' instead (legacy alias in use).");
-                        if (args.Length < 2) return Fail("Usage: delete <id>");
-                        var ok = await client.DeleteAsync(args[1], ct);
-                        Console.WriteLine(ok ? "Deleted." : "Not found.");
-                        return ok ? 0 : 2;
-                    }
+                
                 default:
                     PrintUsage();
                     return 1;
