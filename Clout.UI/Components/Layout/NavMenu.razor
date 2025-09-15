@@ -5,7 +5,6 @@
     <label for="navmenu-toggle" class="navmenu-icon"><FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill" /></label>
     <nav class="sitenav" aria-labelledby="main-menu">
         <FluentNavMenu Id="main-menu" Collapsible="true" Width="250" Title="Navigation menu" @bind-Expanded="expanded" CustomToggle="true">
-            <FluentNavLink Href="/" Match="NavLinkMatch.All" Icon="@(new Icons.Regular.Size20.Home())" IconColor="Color.Accent">Home</FluentNavLink>
             <FluentNavLink Href="blobs" Icon="@(new Icons.Regular.Size20.Database())" IconColor="Color.Accent">Blobs</FluentNavLink>
             <FluentNavLink Href="functions" Icon="@(new Icons.Regular.Size20.Flowchart())" IconColor="Color.Accent">Functions</FluentNavLink>
         </FluentNavMenu>
