@@ -6,6 +6,7 @@ using Clout.Host.Storage;
 using Microsoft.OpenApi.Any;
 using Microsoft.OpenApi.Models;
 using Quartz;
+using Clout.Host.Queue;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,15 +17,20 @@ builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo
     {
-        Title = "Local Cloud API",
+        Title = "Clout Host API",
         Version = "v1",
-        Description = "Simple local blob storage API for creating, listing, downloading, updating, and deleting file blobs."
+        Description = "Simple API for creating, listing, downloading, updating, and deleting file blobs, registering and unregistering .NET Core functions and working with queue."
     });
 });
 
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");
 Directory.CreateDirectory(storageRoot);
 builder.Services.AddSingleton<IBlobStorage>(_ => new FileBlobStorage(storageRoot));
+// Queue options and service registration
+builder.Services.AddOptions<QueueStorageOptions>()
+    .Bind(builder.Configuration.GetSection("Queue"))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IAmqpQueueServer, DiskBackedAmqpQueueServer>();
 builder.Services.AddQuartz(o =>
 {
     o.UseJobFactory<Quartz.Simpl.MicrosoftDependencyInjectionJobFactory>();
@@ -42,6 +48,9 @@ app.MapDefaultEndpoints();
 app.UseSwagger();
 app.UseSwaggerUI();
 var logger = app.Logger;
+
+// Ensure the queue service is created at startup
+_ = app.Services.GetRequiredService<IAmqpQueueServer>();
 
 static string ToQuartzCron(string expr)
 {
@@ -109,6 +118,91 @@ app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
         }
         return op;
     });
+
+// Queue health and AMQP-like endpoints
+app.MapGet("/health", () => Results.Text("OK\n", "text/plain"))
+    .WithName("Health")
+    .WithTags("Queue");
+
+app.MapGet("/health/queues", (IAmqpQueueServer server) =>
+    {
+        var stats = server.GetStats();
+        var json = JsonSerializer.Serialize(stats, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Results.Content(json, "application/json");
+    })
+    .WithName("QueueStats")
+    .WithTags("Queue")
+    .WithDescription("Return current stats for queues.")
+    .WithOpenApi();
+
+var amqp = app.MapGroup("/amqp").WithTags("Queue");
+
+amqp.MapGet("/queues", (IAmqpQueueServer server) =>
+    {
+        var stats = server.GetStats();
+        var json = JsonSerializer.Serialize(stats, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Results.Content(json, "application/json");
+    })
+    .WithName("ListQueues")
+    .WithDescription("List queues and stats.")
+    .WithOpenApi();
+
+amqp.MapPost("/queues/{name}", (string name, IAmqpQueueServer server) =>
+    {
+        server.CreateQueue(name);
+        return Results.StatusCode(StatusCodes.Status201Created);
+    })
+    .WithName("CreateQueue")
+    .WithDescription("Create a queue if missing.")
+    .WithOpenApi();
+
+amqp.MapPost("/queues/{name}/purge", (string name, IAmqpQueueServer server) =>
+    {
+        server.PurgeQueue(name);
+        return Results.Ok();
+    })
+    .WithName("PurgeQueue")
+    .WithDescription("Purge all messages in the queue.")
+    .WithOpenApi();
+
+amqp.MapPost("/queues/{name}/messages", async (string name, HttpRequest request, IAmqpQueueServer server, CancellationToken ct) =>
+    {
+        var elem = await request.ReadFromJsonAsync<JsonElement>(cancellationToken: ct).ConfigureAwait(false);
+        if (elem.ValueKind == JsonValueKind.Undefined)
+        {
+            return Results.BadRequest("Missing or invalid JSON body");
+        }
+        await server.EnqueueAsync(name, elem, ct).ConfigureAwait(false);
+        return Results.Accepted();
+    })
+    .WithName("EnqueueMessage")
+    .WithDescription("Enqueue a JSON message.")
+    .WithOpenApi();
+
+amqp.MapPost("/queues/{name}/dequeue", async (string name, int? timeoutMs, IAmqpQueueServer server, CancellationToken ct) =>
+    {
+        using var linkedCts = timeoutMs is > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct, new CancellationTokenSource(timeoutMs.Value).Token)
+            : null;
+        var token = linkedCts?.Token ?? ct;
+        try
+        {
+            var elem = await server.DequeueAsync<JsonElement>(name, token).ConfigureAwait(false);
+            if (elem.ValueKind == JsonValueKind.Undefined || elem.ValueKind == JsonValueKind.Null)
+            {
+                return Results.NoContent();
+            }
+            var json = JsonSerializer.Serialize(elem, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            return Results.Content(json, "application/json");
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.NoContent();
+        }
+    })
+    .WithName("DequeueMessage")
+    .WithDescription("Dequeue a message, optionally waiting up to timeoutMs.")
+    .WithOpenApi();
 
 // List registered functions (blobs with function metadata)
 // Cancellation: see AGENTS.md > "Cancellation & Async"
