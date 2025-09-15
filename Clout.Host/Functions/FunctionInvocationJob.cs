@@ -1,8 +1,7 @@
+using Cloud.Shared.Abstractions;
 using Quartz;
-using Microsoft.Extensions.Logging;
-using Cloud.Shared;
 
-namespace Clout.Api.Functions;
+namespace Clout.Host.Functions;
 
 internal sealed class FunctionInvocationJob : IJob
 {
@@ -58,4 +57,3 @@ internal sealed class FunctionInvocationJob : IJob
         }
     }
 }
-

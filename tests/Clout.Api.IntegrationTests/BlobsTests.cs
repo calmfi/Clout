@@ -7,11 +7,11 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Threading.Tasks;
-using Cloud.Shared;
+using Cloud.Shared.Models;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
-namespace Clout.Api.IntegrationTests
+namespace Clout.Host.IntegrationTests
 {
     [Collection("Integration.Blobs")] // serialize to avoid storage collisions
     public class BlobsTests(IntegrationTestFactory factory, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<IntegrationTestFactory>

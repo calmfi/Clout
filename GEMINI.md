@@ -9,11 +9,11 @@ Clout is a .NET-based application that provides a local cloud-like environment f
 
 ### Key Components
 
-*   **`Clout.Api`**: An ASP.NET Core Minimal API that serves as the backend for blob storage and function management. It exposes endpoints for uploading, downloading, and managing blobs, as well as registering, scheduling, and executing .NET functions.
-*   **`Clout.Client`**: A command-line interface (CLI) that allows users to interact with the `Clout.Api` from the terminal. It provides commands for all the major functionalities of the API.
+*   **`Clout.Host`**: An ASP.NET Core Minimal API that serves as the backend for blob storage and function management. It exposes endpoints for uploading, downloading, and managing blobs, as well as registering, scheduling, and executing .NET functions.
+*   **`Clout.Client`**: A command-line interface (CLI) that allows users to interact with the `Clout.Host` from the terminal. It provides commands for all the major functionalities of the API.
 *   **`Clout.UI`**: A Blazor-based web application that provides a graphical user interface for interacting with the Clout system. Users can view, upload, and manage blobs and functions through their web browser.
 *   **`Cloud.Shared`**: A shared class library that contains the data models (e.g., `BlobInfo`, `BlobMetadata`) and the `IBlobStorage` interface, which defines the contract for blob storage operations. This library is used by both the API and the client.
-*   **`Clout.Api.IntegrationTests`**: A suite of integration tests for the `Clout.Api` project, ensuring the reliability of the API endpoints.
+*   **`Clout.Host.IntegrationTests`**: A suite of integration tests for the `Clout.Host` project, ensuring the reliability of the API endpoints.
 *   **`Sample.Function`**: An example of a .NET function that can be registered and executed by the Clout system.
 
 ## Building and Running
@@ -31,7 +31,7 @@ dotnet build
 To run the API, use the following command:
 
 ```bash
-dotnet run --project Clout.Api
+dotnet run --project Clout.Api/Clout.Host.csproj
 ```
 
 The API will be available at `http://localhost:5000`, and the Swagger UI can be accessed at `http://localhost:5000/swagger`.

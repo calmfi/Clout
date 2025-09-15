@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Cloud.Shared.Models;
 
 namespace Cloud.Shared;
 

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- API: `Clout.Api/` - ASP.NET Core Minimal API exposing local blob storage with Swagger.
+- API: Project `Clout.Host` (path: `Clout.Host/Clout.Host.csproj`) - ASP.NET Core Minimal API exposing local blob storage with Swagger.
 - Client: `Clout.Client/` - Console client for the API (upload, list, info, download, delete).
 - Shared: `Cloud.Shared/` - Contracts and abstractions shared across projects (e.g., `BlobInfo`, `IBlobStorage`).
 - Build artifacts: `**/bin/`, `**/obj/` (ignored). IDE cache: `.vs/` (ignored).
@@ -10,7 +10,7 @@
 ## Build, Test, and Development Commands
 - `dotnet restore` — restore NuGet packages.
 - `dotnet build` — build all projects.
-- `dotnet run --project Clout.Api` — start API at `http://localhost:5000` with Swagger UI.
+- `dotnet run --project Clout.Host/Clout.Host.csproj` — start API at `http://localhost:5000` with Swagger UI.
 - `dotnet run --project Clout.Client -- <cmd>` - run client (`list|info|upload|download|delete`).
 - `dotnet format` — apply code style/lint fixes.
 

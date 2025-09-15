@@ -18,3 +18,4 @@
     <ProjectReference Include="..\Cloud.Shared\Cloud.Shared.csproj" />
   </ItemGroup>
 </Project>
+

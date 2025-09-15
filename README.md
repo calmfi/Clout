@@ -7,17 +7,17 @@ Clout.slnx
 ├─ Applications/
 │  └─ Clout.Client/          # Console client for the API
 ├─ API/
-│  └─ Clout.Api/             # ASP.NET Core Minimal API (Swagger enabled)
+│  └─ Clout.Host/            # Project: Clout.Host (ASP.NET Core Minimal API)
 ├─ Shared/
 │  └─ Cloud.Shared/          # Shared contracts (BlobInfo, BlobMetadata, IBlobStorage)
 └─ Tests/
-   └─ Clout.Api.IntegrationTests/  # Integration tests for API
+   └─ Clout.Host.IntegrationTests/ # Integration tests for API (folder: tests/Clout.Api.IntegrationTests)
 ```
 
 ## Common Commands
 
 - Restore/build all: `dotnet build`
-- Run API: `dotnet run --project Clout.Api` (Swagger at `/swagger`)
+- Run API: `dotnet run --project Clout.Host/Clout.Host.csproj` (Swagger at `/swagger`)
 - Run client: `dotnet run --project Clout.Client -- <cmd>`
   - Blob commands (grouped under `blob`):
     - `blob list`, `blob info <id>`, `blob upload <path>`, `blob download <id> <dest>`, `blob delete <id>`,
@@ -26,7 +26,7 @@ Clout.slnx
     - `functions register <dllPath> <name> [runtime=dotnet] [--cron <expr>]`,
       `functions schedule <id> <ncrontab>`, `functions unschedule <id>`,
       `functions cron-next <ncrontab> [count=5]`
-- Test API: `dotnet test tests/Clout.Api.IntegrationTests/Clout.Api.IntegrationTests.csproj`
+- Test API: `dotnet test tests/Clout.Api.IntegrationTests/Clout.Host.IntegrationTests.csproj`
 
 Tip: Set `CLOUT_API` to point the client at a non-default base URL (default `http://localhost:5000`).
 

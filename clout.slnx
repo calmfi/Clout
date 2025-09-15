@@ -1,8 +1,6 @@
 <Solution>
-  <Folder Name="/API/">
-    <Project Path="Clout.Api/Clout.Api.csproj" />
-  </Folder>
   <Folder Name="/Applications/">
+    <Project Path="Clout.Host/Clout.Host.csproj" />
     <Project Path="Clout.Client/Clout.Client.csproj" />
     <Project Path="Clout.UI/Clout.UI.csproj" Id="9029138c-9c47-4d92-9915-e572c205f4c5" />
   </Folder>
@@ -13,6 +11,6 @@
     <Project Path="samples/Sample.Function/Sample.Function.csproj" />
   </Folder>
   <Folder Name="/Tests/">
-    <Project Path="tests/Clout.Api.IntegrationTests/Clout.Api.IntegrationTests.csproj" />
+    <Project Path="tests/Clout.Api.IntegrationTests/Clout.Host.IntegrationTests.csproj" />
   </Folder>
 </Solution>

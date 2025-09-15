@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 
-namespace Clout.Api.Functions;
+namespace Clout.Host;
 
 internal sealed class IsolatedLoadContext : AssemblyLoadContext
 {
@@ -15,13 +15,20 @@ internal sealed class IsolatedLoadContext : AssemblyLoadContext
     protected override Assembly? Load(AssemblyName assemblyName)
     {
         var path = _resolver.ResolveAssemblyToPath(assemblyName);
-        return path is null ? null : LoadFromAssemblyPath(path);
+        if (path is not null)
+        {
+            return LoadFromAssemblyPath(path);
+        }
+        return null;
     }
 
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
     {
         var path = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
-        return path is null ? IntPtr.Zero : LoadUnmanagedDllFromPath(path);
+        if (path is not null)
+        {
+            return LoadUnmanagedDllFromPath(path);
+        }
+        return IntPtr.Zero;
     }
 }
-

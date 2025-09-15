@@ -1,4 +1,4 @@
-namespace Cloud.Shared;
+namespace Cloud.Shared.Models;
 
 /// <summary>
 /// Describes a stored blob and its metadata.

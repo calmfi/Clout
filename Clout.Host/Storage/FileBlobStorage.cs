@@ -1,7 +1,8 @@
 using System.Text.Json;
-using Cloud.Shared;
+using Cloud.Shared.Abstractions;
+using Cloud.Shared.Models;
 
-namespace Clout.Api;
+namespace Clout.Host.Storage;
 
 /// <summary>
 /// File-system based implementation of <see cref="IBlobStorage"/>, storing content and metadata under a root folder.

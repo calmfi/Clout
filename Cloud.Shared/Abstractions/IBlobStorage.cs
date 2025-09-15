@@ -1,4 +1,6 @@
-namespace Cloud.Shared;
+using Cloud.Shared.Models;
+
+namespace Cloud.Shared.Abstractions;
 
 /// <summary>
 /// Abstraction for blob storage operations.

@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "Clout.Api": {
+    "Clout.Host": {
       "commandName": "Project",
       "launchBrowser": true,
       "environmentVariables": {

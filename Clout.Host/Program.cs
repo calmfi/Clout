@@ -1,6 +1,8 @@
 using System.Text.Json;
-using Cloud.Shared;
-using Clout.Api;
+using Cloud.Shared.Abstractions;
+using Cloud.Shared.Models;
+using Clout.Host;
+using Clout.Host.Storage;
 using Microsoft.OpenApi.Any;
 using Microsoft.OpenApi.Models;
 using Quartz;
@@ -51,7 +53,7 @@ static string ToQuartzCron(string expr)
 static async Task ScheduleFunctionAsync(IScheduler scheduler, string blobId, string functionName, string cron)
 {
     var jobKey = new JobKey($"function-{blobId}");
-    var job = JobBuilder.Create<Clout.Api.Functions.FunctionInvocationJob>()
+    var job = JobBuilder.Create<Clout.Host.Functions.FunctionInvocationJob>()
         .WithIdentity(jobKey)
         .UsingJobData("blobId", blobId)
         .UsingJobData("functionName", functionName)

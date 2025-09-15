@@ -2,10 +2,9 @@ using System.Collections.Generic;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
-namespace Clout.Api.IntegrationTests;
+namespace Clout.Host.IntegrationTests;
 
 public class IntegrationTestFactory : WebApplicationFactory<Program>
 {
@@ -34,4 +33,3 @@ public class IntegrationTestFactory : WebApplicationFactory<Program>
         });
     }
 }
-

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cloud.Shared;
+using Cloud.Shared.Models;
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 using var cts = new CancellationTokenSource();

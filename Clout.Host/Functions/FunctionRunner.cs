@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace Clout.Api.Functions;
+namespace Clout.Host.Functions;
 
 internal static class FunctionRunner
 {

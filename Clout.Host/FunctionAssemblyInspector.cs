@@ -1,6 +1,6 @@
 using System.Reflection;
 
-namespace Clout.Api;
+namespace Clout.Host;
 
 internal static class FunctionAssemblyInspector
 {

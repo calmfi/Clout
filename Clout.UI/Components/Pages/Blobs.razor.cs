@@ -1,4 +1,5 @@
 ﻿using Cloud.Shared;
+using Cloud.Shared.Models;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
@@ -127,7 +128,7 @@ public partial class Blobs
     {
         _metaEdit = true;
         _metaEditList = _meta.Select(m => new EditMetaRow
-            { Name = m.Name, ContentType = m.ContentType, Value = m.Value }).ToList();
+        { Name = m.Name, ContentType = m.ContentType, Value = m.Value }).ToList();
     }
 
     private async Task SaveEditAsync()
