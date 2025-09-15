@@ -42,7 +42,8 @@ static string ToQuartzCron(string expr)
     var parts = expr.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
     if (parts.Length == 5)
     {
-        return $"0 {expr}"; // add seconds
+        // Convert 5-field NCRONTAB to Quartz: seconds + '?' for day-of-week
+        return $"0 {parts[0]} {parts[1]} {parts[2]} {parts[3]} ?";
     }
     return expr; // assume already includes seconds
 }
@@ -93,6 +94,43 @@ app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
             "createdUtc": "2025-09-13T21:20:00Z",
             "contentType": "text/plain",
             "metadata": []
+          }
+        ]
+        """;
+        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
+
+// List registered functions (blobs with function metadata)
+// Cancellation: see AGENTS.md > "Cancellation & Async"
+app.MapGet("/api/functions", async (IBlobStorage storage, CancellationToken ct) =>
+    {
+        var all = await storage.ListAsync(ct);
+        var functions = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase)) == true).ToList();
+        var json = JsonSerializer.Serialize(functions, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Results.Content(json, "application/json");
+    })
+    .WithName("ListFunctions")
+    .WithTags("Functions")
+    .WithDescription("List all registered functions (identified by 'function.name' metadata).")
+    .WithOpenApi(op =>
+    {
+        var example = """
+        [
+          {
+            "id": "f1a2b3",
+            "fileName": "MyFunction.dll",
+            "size": 12345,
+            "createdUtc": "2025-09-13T21:20:00Z",
+            "contentType": "application/octet-stream",
+            "metadata": [
+              { "name": "function.name", "contentType": "text/plain", "value": "Echo" },
+              { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
+              { "name": "function.entrypoint", "contentType": "text/plain", "value": "MyFunction.dll" }
+            ]
           }
         ]
         """;
@@ -867,7 +905,10 @@ app.MapPost("/api/functions/unschedule-all", async (HttpRequest request, IBlobSt
     .WithDescription("Remove the TimerTrigger cron on all functions that reference the given source DLL id.")
     .WithOpenApi();
 
-// Initialize Quartz schedules from persisted metadata at startup
+// Initialize Quartz schedules from persisted metadata at startup (can be disabled for tests)
+var disableQuartz = string.Equals(Environment.GetEnvironmentVariable("DISABLE_QUARTZ"), "1", StringComparison.OrdinalIgnoreCase)
+                    || app.Configuration.GetValue<bool>("DisableQuartz");
+if (!disableQuartz)
 {
     using var scope = app.Services.CreateScope();
     var storage = scope.ServiceProvider.GetRequiredService<IBlobStorage>();

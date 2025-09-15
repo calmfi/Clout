@@ -30,6 +30,15 @@ public sealed class BlobApiClient
     }
 
     /// <summary>
+    /// Lists all registered functions (blobs with function metadata).
+    /// </summary>
+    public async Task<List<BlobInfo>> ListFunctionsAsync(CancellationToken cancellationToken = default)
+    {
+        var items = await _http.GetFromJsonAsync("/api/functions", AppJsonContext.Default.ListBlobInfo, cancellationToken);
+        return items ?? new List<BlobInfo>();
+    }
+
+    /// <summary>
     /// Gets metadata for a blob.
     /// </summary>
     /// <param name="id">Blob identifier.</param>

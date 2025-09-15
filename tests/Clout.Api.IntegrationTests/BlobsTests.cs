@@ -14,7 +14,7 @@ using Xunit;
 namespace Clout.Api.IntegrationTests
 {
     [Collection("Integration.Blobs")] // serialize to avoid storage collisions
-    internal class BlobsTests(WebApplicationFactory<Program> factory, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<WebApplicationFactory<Program>>
+    public class BlobsTests(IntegrationTestFactory factory, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<IntegrationTestFactory>
     {
         private readonly WebApplicationFactory<Program> _factory = factory;
         private readonly Xunit.Abstractions.ITestOutputHelper _output = output;

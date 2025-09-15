@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -12,7 +13,7 @@ using Xunit;
 namespace Clout.Api.IntegrationTests
 {
     [Collection("Integration.Blobs")] // reuse same collection to serialize against shared storage folder
-    internal class FunctionsTests(WebApplicationFactory<Program> factory, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<WebApplicationFactory<Program>>
+    public class FunctionsTests(IntegrationTestFactory factory, Xunit.Abstractions.ITestOutputHelper output) : IClassFixture<IntegrationTestFactory>
     {
         private readonly WebApplicationFactory<Program> _factory = factory;
         private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
@@ -211,6 +212,51 @@ namespace Clout.Api.IntegrationTests
             Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
             var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
             Assert.Contains("Invalid NCRONTAB", body, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public async Task ListFunctions_ReturnsOnlyFunctionEntries()
+        {
+            CleanupStorage();
+            HttpClient client = _factory.CreateClient();
+
+            // Upload a non-function blob
+            using (var form = new MultipartFormDataContent())
+            {
+                using var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("hello"));
+                var file = new StreamContent(ms);
+                file.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
+                form.Add(file, "file", "plain.txt");
+                var blobResp = await client.PostAsync("/api/blobs", form).ConfigureAwait(false);
+                Assert.Equal(HttpStatusCode.Created, blobResp.StatusCode);
+                var plain = await blobResp.Content.ReadFromJsonAsync<BlobInfo>().ConfigureAwait(false);
+                Assert.NotNull(plain);
+            }
+
+            // Register a function
+            var path = GetSampleDllPath();
+            using (var form2 = new MultipartFormDataContent())
+            {
+                using FileStream stream = File.OpenRead(path);
+                var file = new StreamContent(stream);
+                file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                form2.Add(file, "file", Path.GetFileName(path));
+                form2.Add(new StringContent("Echo"), "name");
+                form2.Add(new StringContent("dotnet"), "runtime");
+
+                HttpResponseMessage resp = await client.PostAsync("/api/functions/register", form2).ConfigureAwait(false);
+                Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+                var fn = await resp.Content.ReadFromJsonAsync<BlobInfo>().ConfigureAwait(false);
+                Assert.NotNull(fn);
+            }
+
+            // List functions and ensure only the function entry appears
+            HttpResponseMessage listResp = await client.GetAsync("/api/functions").ConfigureAwait(false);
+            Assert.Equal(HttpStatusCode.OK, listResp.StatusCode);
+            var list = await listResp.Content.ReadFromJsonAsync<List<BlobInfo>>().ConfigureAwait(false);
+            Assert.NotNull(list);
+            Assert.NotEmpty(list);
+            Assert.All(list!, item => Assert.Contains(item.Metadata, m => m.Name == "function.name"));
         }
     }
 }

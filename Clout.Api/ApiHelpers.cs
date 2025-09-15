@@ -19,7 +19,14 @@ internal static class ApiHelpers
         var parts = expr.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 5)
         {
-            return $"0 {expr}"; // prepend seconds for Quartz compatibility
+            // Convert NCRONTAB (m h dom mon dow) to Quartz (s m h dom mon dow)
+            // Use '?' for day-of-week to satisfy Quartz requirement for one of day fields
+            var m = parts[0];
+            var h = parts[1];
+            var dom = parts[2];
+            var mon = parts[3];
+            // ignore NCRONTAB dow and set '?'
+            return $"0 {m} {h} {dom} {mon} ?";
         }
         return expr;
     }

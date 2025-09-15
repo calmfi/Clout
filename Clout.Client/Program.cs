@@ -159,6 +159,16 @@ try
                                 return Fail($"Invalid NCRONTAB expression: {ex.Message}");
                             }
                         }
+                    case "list":
+                        {
+                            var items = await client.ListFunctionsAsync(ct).ConfigureAwait(false);
+                            foreach (var f in items)
+                            {
+                                var name = f.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value ?? "<unknown>";
+                                Console.WriteLine($"{f.Id}\t{name}\t{f.FileName}");
+                            }
+                            return 0;
+                        }
                     case "register":
                         {
                             if (args.Length < 4)
@@ -343,7 +353,7 @@ try
                             return 0;
                         }
                     default:
-                        return Fail("Supported: functions register|register-many|register-from|register-many-from|schedule|unschedule");
+                        return Fail("Supported: functions list|register|register-many|register-from|register-many-from|schedule|unschedule");
                 }
             }
 
@@ -382,6 +392,7 @@ void PrintUsage()
     Console.WriteLine("  clout blob download <id> <destPath>");
     Console.WriteLine("  clout blob delete <id>");
     Console.WriteLine("  clout blob metadata set <id> <name> <content-type> <value> [<name> <content-type> <value> ...]");
+    Console.WriteLine("  clout functions list");
     Console.WriteLine("  clout functions register <dllPath> <name> [runtime=dotnet] [--cron <expr>]");
     Console.WriteLine("  clout functions register-many <dllPath> <name1> [<name2> ...] [--runtime <r>] [--cron <expr>]");
     Console.WriteLine("  clout functions register-from <dllBlobId> <name> [runtime=dotnet]");
