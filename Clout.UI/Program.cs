@@ -3,38 +3,38 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace Clout.UI
 {
-    public class Program
+    internal class Program
     {
         public static void Main(string[] args)
         {
-            var builder = WebApplication.CreateBuilder(args);
+            WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
             // Add services to the container.
-            builder.Services.AddRazorComponents()
+            _ = builder.Services.AddRazorComponents()
                 .AddInteractiveServerComponents();
-            builder.Services.AddFluentUIComponents();
+            _ = builder.Services.AddFluentUIComponents();
 
             // Register API client for the Local Cloud API
             var apiBase = Environment.GetEnvironmentVariable("CLOUT_API") ?? "http://localhost:5000";
-            builder.Services.AddSingleton(new Cloud.Shared.BlobApiClient(apiBase));
-            builder.Services.AddSingleton(new AppConfig(apiBase));
+            _ = builder.Services.AddSingleton(new Cloud.Shared.BlobApiClient(apiBase));
+            _ = builder.Services.AddSingleton(new AppConfig(apiBase));
 
-            var app = builder.Build();
+            WebApplication app = builder.Build();
 
             // Configure the HTTP request pipeline.
             if (!app.Environment.IsDevelopment())
             {
-                app.UseExceptionHandler("/Error");
+                _ = app.UseExceptionHandler("/Error");
                 // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
-                app.UseHsts();
+                _ = app.UseHsts();
             }
 
-            app.UseHttpsRedirection();
+            _ = app.UseHttpsRedirection();
 
-            app.UseAntiforgery();
+            _ = app.UseAntiforgery();
 
-            app.MapStaticAssets();
-            app.MapRazorComponents<App>()
+            _ = app.MapStaticAssets();
+            _ = app.MapRazorComponents<App>()
                 .AddInteractiveServerRenderMode();
 
             app.Run();
