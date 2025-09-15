@@ -6,6 +6,6 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="NCrontab" Version="3.4.0" />
+    <PackageReference Include="Quartz" Version="3.9.0" />
   </ItemGroup>
 </Project>

@@ -1,9 +1,9 @@
+using System.Text.Json;
 using Cloud.Shared;
 using Clout.Api;
-using Clout.Api.Functions;
 using Microsoft.OpenApi.Any;
 using Microsoft.OpenApi.Models;
-using System.Text.Json;
+using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,13 +21,56 @@ builder.Services.AddSwaggerGen(c =>
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");
 Directory.CreateDirectory(storageRoot);
 builder.Services.AddSingleton<IBlobStorage>(_ => new FileBlobStorage(storageRoot));
-builder.Services.AddHostedService<FunctionTimerService>();
+builder.Services.AddQuartz(q =>
+{
+    q.UseMicrosoftDependencyInjectionJobFactory();
+});
+builder.Services.AddQuartzHostedService(opt =>
+{
+    opt.WaitForJobsToComplete = true;
+});
 
 builder.WebHost.UseUrls("http://localhost:5000");
 var app = builder.Build();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+var logger = app.Logger;
+
+static string ToQuartzCron(string expr)
+{
+    var parts = expr.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+    if (parts.Length == 5)
+    {
+        return $"0 {expr}"; // add seconds
+    }
+    return expr; // assume already includes seconds
+}
+
+static async Task ScheduleFunctionAsync(IScheduler scheduler, string blobId, string functionName, string cron)
+{
+    var jobKey = new JobKey($"function-{blobId}");
+    var job = JobBuilder.Create<Clout.Api.Functions.FunctionInvocationJob>()
+        .WithIdentity(jobKey)
+        .UsingJobData("blobId", blobId)
+        .UsingJobData("functionName", functionName)
+        .Build();
+
+    var trigger = TriggerBuilder.Create()
+        .WithIdentity($"trigger-{blobId}")
+        .ForJob(jobKey)
+        .WithCronSchedule(ToQuartzCron(cron))
+        .Build();
+
+    // Replace existing schedule if present
+    await scheduler.ScheduleJob(job, new HashSet<ITrigger> { trigger }, replace: true);
+}
+
+static async Task UnscheduleFunctionAsync(IScheduler scheduler, string blobId)
+{
+    var jobKey = new JobKey($"function-{blobId}");
+    await scheduler.DeleteJob(jobKey);
+}
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
@@ -118,7 +161,7 @@ app.MapPost("/api/functions/register-from/{dllId}", async (string dllId, HttpReq
     .WithOpenApi();
 
 // Register multiple functions from an existing DLL blob id
-app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
         {
@@ -141,6 +184,7 @@ app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, Ht
             try
             {
                 var results = new List<BlobInfo>();
+                var scheduler = await schedFactory.GetScheduler();
                 foreach (var name in payload.Names.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
                     if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
@@ -163,6 +207,10 @@ app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, Ht
                         if (!ApiHelpers.TryParseSchedule(payload.Cron, out _))
                             return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
                         metadata.Add(new BlobMetadata("TimerTrigger", "text/plain", payload.Cron));
+                        await ScheduleFunctionAsync(scheduler, saved.Id, name, payload.Cron);
+                        var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{saved.Id}"));
+                        var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
+                        if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, saved.Id, next);
                     }
                     var updated = await storage.SetMetadataAsync(saved.Id, metadata, ct);
                     results.Add(updated ?? saved);
@@ -184,7 +232,7 @@ app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, Ht
     .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
-app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
         {
@@ -238,6 +286,7 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
             try
             {
                 var results = new List<BlobInfo>();
+                var scheduler = await schedFactory.GetScheduler();
                 foreach (var name in names)
                 {
                     if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
@@ -255,7 +304,14 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
                         new("function.declaringType", "text/plain", declaringType ?? string.Empty),
                         new("function.verified", "text/plain", "true")
                     };
-                    if (addCron) metadata.Add(new BlobMetadata("TimerTrigger", "text/plain", cron));
+                    if (addCron)
+                    {
+                        metadata.Add(new BlobMetadata("TimerTrigger", "text/plain", cron));
+                        await ScheduleFunctionAsync(scheduler, info.Id, name, cron);
+                        var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{info.Id}"));
+                        var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
+                        if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, info.Id, next);
+                    }
                     var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
                     results.Add(updated ?? info);
                     ct.ThrowIfCancellationRequested();
@@ -499,7 +555,7 @@ app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage 
     });
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
-app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
         {
@@ -520,6 +576,16 @@ app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest reques
             list.Add(new BlobMetadata("TimerTrigger", "text/plain", expr!));
             var updated = await storage.SetMetadataAsync(id, list, ct);
             if (updated is null) return Results.NotFound();
+            // Schedule with Quartz
+            var scheduler = await schedFactory.GetScheduler();
+            var funcName = updated.Metadata.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+            if (!string.IsNullOrWhiteSpace(funcName))
+            {
+                await ScheduleFunctionAsync(scheduler, id, funcName!, expr!);
+                var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{id}"));
+                var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
+                if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", funcName, id, next);
+            }
             var json = System.Text.Json.JsonSerializer.Serialize(updated, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
             return Results.Content(json, "application/json");
         }
@@ -555,7 +621,7 @@ app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest reques
     });
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
-app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage storage, CancellationToken ct) =>
+app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         var info = await storage.GetInfoAsync(id, ct);
         if (info is null) return Results.NotFound();
@@ -563,6 +629,9 @@ app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage sto
         list.RemoveAll(m => string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase));
         var updated = await storage.SetMetadataAsync(id, list, ct);
         if (updated is null) return Results.NotFound();
+        var scheduler = await schedFactory.GetScheduler();
+        await UnscheduleFunctionAsync(scheduler, id);
+        logger.LogInformation("Unscheduled function job for {Id}", id);
         var json = System.Text.Json.JsonSerializer.Serialize(updated, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         return Results.Content(json, "application/json");
     })
@@ -592,7 +661,7 @@ app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage sto
     });
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
-app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
         {
@@ -660,6 +729,11 @@ app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBl
                 };
                 var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
                 var result = updated ?? info;
+                var scheduler = await schedFactory.GetScheduler();
+                await ScheduleFunctionAsync(scheduler, result.Id, name, cron);
+                var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{result.Id}"));
+                var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
+                if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, result.Id, next);
                 var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
                 return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
             }
@@ -706,15 +780,16 @@ app.MapGet("/api/functions/cron-next", (string expr, int? count) =>
     {
         if (!ApiHelpers.TryParseSchedule(expr, out var schedule))
         {
-            return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+            return Results.Text("Invalid cron expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
         }
         var n = Math.Clamp(count.GetValueOrDefault(5), 1, 50);
         var list = new List<string>(n);
-        var now = DateTime.UtcNow;
-        var next = now;
+        var next = DateTimeOffset.UtcNow;
         for (int i = 0; i < n; i++)
         {
-            next = schedule.GetNextOccurrence(next);
+            var maybe = schedule!.GetNextValidTimeAfter(next);
+            if (!maybe.HasValue) break;
+            next = maybe.Value;
             list.Add(next.ToString("u") + " UTC");
         }
         return Results.Json(list);
@@ -725,7 +800,7 @@ app.MapGet("/api/functions/cron-next", (string expr, int? count) =>
     .WithOpenApi();
 
 // Bulk schedule all functions referencing a given source DLL id
-app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct) ?? new();
         if (!payload.TryGetValue("sourceId", out var sourceId) || string.IsNullOrWhiteSpace(sourceId))
@@ -738,6 +813,7 @@ app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStor
         var all = await storage.ListAsync(ct);
         var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
         var count = 0;
+        var scheduler = await schedFactory.GetScheduler();
         foreach (var f in funcs)
         {
             var meta = f.Metadata ?? new List<BlobMetadata>();
@@ -745,6 +821,16 @@ app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStor
             meta = meta.Where(m => !string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase)).ToList();
             meta.Add(new BlobMetadata("TimerTrigger", "text/plain", cron));
             await storage.SetMetadataAsync(f.Id, meta, ct);
+            var name = meta.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value
+                ?? f.Metadata.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value
+                ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                await ScheduleFunctionAsync(scheduler, f.Id, name, cron);
+                var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{f.Id}"));
+                var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
+                if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, f.Id, next);
+            }
             count++;
             ct.ThrowIfCancellationRequested();
         }
@@ -756,7 +842,7 @@ app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStor
     .WithOpenApi();
 
 // Bulk unschedule all functions referencing a given source DLL id
-app.MapPost("/api/functions/unschedule-all", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPost("/api/functions/unschedule-all", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct) ?? new();
         if (!payload.TryGetValue("sourceId", out var sourceId) || string.IsNullOrWhiteSpace(sourceId))
@@ -764,11 +850,13 @@ app.MapPost("/api/functions/unschedule-all", async (HttpRequest request, IBlobSt
         var all = await storage.ListAsync(ct);
         var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
         var count = 0;
+        var scheduler = await schedFactory.GetScheduler();
         foreach (var f in funcs)
         {
             var meta = f.Metadata ?? new List<BlobMetadata>();
             meta = meta.Where(m => !string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase)).ToList();
             await storage.SetMetadataAsync(f.Id, meta, ct);
+            await UnscheduleFunctionAsync(scheduler, f.Id);
             count++;
             ct.ThrowIfCancellationRequested();
         }
@@ -779,11 +867,25 @@ app.MapPost("/api/functions/unschedule-all", async (HttpRequest request, IBlobSt
     .WithDescription("Remove the TimerTrigger cron on all functions that reference the given source DLL id.")
     .WithOpenApi();
 
-app.Run();
+// Initialize Quartz schedules from persisted metadata at startup
+{
+    using var scope = app.Services.CreateScope();
+    var storage = scope.ServiceProvider.GetRequiredService<IBlobStorage>();
+    var schedulerFactory = scope.ServiceProvider.GetRequiredService<ISchedulerFactory>();
+    var scheduler = await schedulerFactory.GetScheduler();
+    var blobs = await storage.ListAsync();
+    foreach (var b in blobs)
+    {
+        var name = b.Metadata.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+        var cron = b.Metadata.FirstOrDefault(m => string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase))?.Value;
+        if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(cron))
+        {
+            await ScheduleFunctionAsync(scheduler, b.Id, name!, cron!);
+            var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{b.Id}"));
+            var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
+            if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, b.Id, next);
+        }
+    }
+}
 
-public partial class Program { }
-
-// Types moved to separate files under the Clout.Api namespace.
-
-
-internal sealed record RegisterManyRequest(string[] Names, string? Runtime, string? Cron);
+await app.RunAsync(default);

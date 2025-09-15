@@ -1,22 +1,26 @@
+using Quartz;
+
 internal static class ApiHelpers
 {
-    public static bool TryParseSchedule(string expr, out NCrontab.CrontabSchedule schedule)
+    public static bool TryParseSchedule(string expr, out CronExpression? schedule)
     {
-        try
+        var normalized = NormalizeForQuartz(expr);
+        if (CronExpression.IsValidExpression(normalized))
         {
-            schedule = NCrontab.CrontabSchedule.Parse(expr, new NCrontab.CrontabSchedule.ParseOptions { IncludingSeconds = true });
+            schedule = new CronExpression(normalized);
             return true;
         }
-        catch { }
-        try
+        schedule = null;
+        return false;
+    }
+
+    private static string NormalizeForQuartz(string expr)
+    {
+        var parts = expr.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 5)
         {
-            schedule = NCrontab.CrontabSchedule.Parse(expr, new NCrontab.CrontabSchedule.ParseOptions { IncludingSeconds = false });
-            return true;
+            return $"0 {expr}"; // prepend seconds for Quartz compatibility
         }
-        catch
-        {
-            schedule = null!;
-            return false;
-        }
+        return expr;
     }
 }

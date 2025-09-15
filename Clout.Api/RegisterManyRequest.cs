@@ -1,0 +1,1 @@
+internal sealed record RegisterManyRequest(string[] Names, string? Runtime, string? Cron);

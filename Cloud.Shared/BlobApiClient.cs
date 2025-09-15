@@ -1,6 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using NCrontab;
+using Quartz;
 
 namespace Cloud.Shared;
 
@@ -194,18 +194,19 @@ public sealed class BlobApiClient
 
 
     /// <summary>
-    /// Registers a function and schedules it with an NCRONTAB TimerTrigger in one call.
+    /// Registers a function and schedules it with a Quartz cron TimerTrigger in one call.
     /// </summary>
     /// <param name="dllPath">Path to the function .dll.</param>
     /// <param name="name">Function name. Assembly must contain a public method with this name.</param>
-    /// <param name="cron">NCRONTAB expression (5- or 6-field) for TimerTrigger.</param>
+    /// <param name="cron">Cron expression (Quartz; 5 or 6 fields) for TimerTrigger.</param>
     /// <param name="runtime">Runtime identifier (default: "dotnet").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The updated BlobInfo after scheduling.</returns>
     public async Task<BlobInfo> RegisterFunctionWithScheduleAsync(string dllPath, string name, string cron, string runtime = "dotnet", CancellationToken cancellationToken = default)
     {
-        // Validate cron locally
-        TryParseSchedule(cron, out _);
+        // Validate cron locally against Quartz format (5 or 6 fields)
+        if (!TryParseSchedule(cron, out _))
+            throw new ArgumentException("Invalid cron expression (Quartz format expected).", nameof(cron));
 
         var info = await RegisterFunctionAsync(dllPath, name, runtime, cancellationToken);
         var updated = await SetTimerTriggerAsync(info.Id, cron, cancellationToken);
@@ -213,17 +214,14 @@ public sealed class BlobApiClient
     }
 
     /// <summary>
-    /// Sets or updates the TimerTrigger NCRONTAB expression on a function blob's metadata.
+    /// Sets or updates the TimerTrigger cron expression on a function blob's metadata (Quartz).
     /// Preserves other existing metadata entries.
     /// </summary>
     public async Task<BlobInfo> SetTimerTriggerAsync(string id, string cron, CancellationToken cancellationToken = default)
     {
-        // Validate NCRONTAB locally (support 5- or 6-field expressions)
-        try
-        {
-            TryParseSchedule(cron, out _);
-        }
-        catch (Exception ex) { throw new ArgumentException($"Invalid NCRONTAB expression: {ex.Message}"); }
+        // Validate locally (Quartz cron, support 5- or 6-field)
+        if (!TryParseSchedule(cron, out _))
+            throw new ArgumentException("Invalid cron expression (Quartz format expected).", nameof(cron));
 
         var payload = new Dictionary<string, string> { ["expression"] = cron };
         var response = await _http.PostAsJsonAsync($"/api/functions/{id}/schedule", payload, AppJsonContext.Default.DictionaryStringString, cancellationToken);
@@ -232,21 +230,30 @@ public sealed class BlobApiClient
         return result!;
     }
 
-    private static bool TryParseSchedule(string expr, out CrontabSchedule schedule)
+    private static bool TryParseSchedule(string expr, out CronExpression? schedule)
     {
-        try
+        var normalized = NormalizeCron(expr);
+        if (CronExpression.IsValidExpression(normalized))
         {
-            schedule = CrontabSchedule.Parse(expr, new CrontabSchedule.ParseOptions { IncludingSeconds = true });
+            schedule = new CronExpression(normalized);
             return true;
         }
-        catch { }
-        schedule = null!;
-        schedule = CrontabSchedule.Parse(expr, new CrontabSchedule.ParseOptions { IncludingSeconds = false });
-        return true;
+        schedule = null;
+        return false;
+    }
+
+    private static string NormalizeCron(string expr)
+    {
+        var parts = expr.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 5)
+        {
+            return $"0 {expr}"; // add seconds for Quartz
+        }
+        return expr;
     }
 
     /// <summary>
-    /// Validates whether the provided NCRONTAB expression is syntactically valid
+    /// Validates whether the provided cron expression is syntactically valid (Quartz)
     /// (with or without seconds). Returns false on invalid expressions.
     /// </summary>
     public static bool IsValidCron(string expr)
