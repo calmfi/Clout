@@ -12,6 +12,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
+// Add services to the container.
+builder.Services.AddProblemDetails();
+builder.Services.AddOpenApi();
+builder.Services.AddOpenTelemetry();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -35,8 +40,8 @@ builder.Services.AddSwaggerGen(c =>
 
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");
 Directory.CreateDirectory(storageRoot);
+
 builder.Services.AddSingleton<IBlobStorage>(_ => new FileBlobStorage(storageRoot));
-// Queue options and service registration
 builder.Services.AddOptions<QueueStorageOptions>()
     .Bind(builder.Configuration.GetSection("Queue"))
     .ValidateOnStart();
@@ -50,13 +55,16 @@ builder.Services.AddQuartzHostedService(opt =>
     opt.WaitForJobsToComplete = true;
 });
 
-builder.WebHost.UseUrls("http://localhost:5000");
 var app = builder.Build();
 
 app.MapDefaultEndpoints();
 
 app.UseSwagger();
+
+app.UseWebSockets();
+
 app.UseSwaggerUI();
+
 var logger = app.Logger;
 
 // Ensure the queue service is created at startup
@@ -864,7 +872,7 @@ app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBl
                 }
 
                 await using var dllStream = File.OpenRead(tempPath);
-                var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct);
+                var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct).ConfigureAwait(false);
 
                 var metadata = new List<BlobMetadata>
                 {
