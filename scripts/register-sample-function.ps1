@@ -2,7 +2,7 @@
 # Usage: ./scripts/register-sample-function.ps1 [-Api http://localhost:5000]
 
 param(
-    [string]$Api = "http://localhost:5000"
+    [string]$Api = "http://localhost:5050"
 )
 
 $ErrorActionPreference = 'Stop'
