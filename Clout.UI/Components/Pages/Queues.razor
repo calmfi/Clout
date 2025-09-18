@@ -1,0 +1,96 @@
+@page "/queues"
+@using System.Text.Json
+@rendermode InteractiveServer
+
+<h1>Queues</h1>
+
+<FluentStack Orientation="Orientation.Horizontal" Spacing="8" AlignItems="Alignment.Center" Wrap="true">
+    <FluentButton Appearance="Appearance.Accent" OnClick="LoadStatsAsync">Refresh</FluentButton>
+    <FluentTextField Style="width:220px" Placeholder="New / existing queue name" @bind-Value="_queueName" />
+    <FluentButton Appearance="Appearance.Accent" OnClick="CreateQueueAsync" Disabled="@string.IsNullOrWhiteSpace(_queueName)">Create</FluentButton>
+    <FluentButton Appearance="Appearance.Accent" OnClick="PurgeQueueAsync" Disabled="@(!_queues.Any(q => q.Name.Equals(_queueName, StringComparison.OrdinalIgnoreCase)))">Purge</FluentButton>
+    <FluentDivider />
+    <FluentTextField Style="width:340px" Placeholder="JSON or string payload" @bind-Value="_enqueuePayload" />
+    <FluentSwitch @bind-Checked="_asJson">As JSON</FluentSwitch>
+    <FluentButton Appearance="Appearance.Accent" OnClick="EnqueueAsync" Disabled="@string.IsNullOrWhiteSpace(_queueName)">Enqueue</FluentButton>
+    <FluentDivider />
+    <FluentButton Appearance="Appearance.Accent" OnClick="DequeueAsync" Disabled="@string.IsNullOrWhiteSpace(_queueName)">Dequeue</FluentButton>
+    @if (_dequeueLoading)
+    {
+        <FluentProgressRing />
+    }
+    <span style="font-size:.85em; color:var(--neutral-foreground-rest)">Dequeued: @_messages.Count</span>
+    <FluentDivider />
+@*     <FluentSwitch @bind-Checked="_autoRefresh" OnChange="@(e => StartAutoRefresh())">Auto-refresh</FluentSwitch>
+ *@    <FluentTextField Style="width:90px" Placeholder="ms" @bind-Value="_refreshMs" />
+    @if (!string.IsNullOrEmpty(_error))
+    {
+        <span style="color:var(--neutral-foreground-rest)">Error: @_error</span>
+    }
+</FluentStack>
+
+<div style="margin-top:14px; display:grid; grid-template-columns: minmax(360px, 480px) 1fr; gap:24px; align-items:start;">
+    <div>
+        <h3 style="margin:4px 0 8px;">Queues</h3>
+        <FluentDataGrid TGridItem="QueueRow"
+                        Items="@_queues.AsQueryable()"
+                        RowsPerPage="10"
+                        GridHeight="420px"
+                        Density="Density.Compact">
+            <!-- Make name a clickable template (removes invalid @onrowclick attribute) -->
+            <TemplateColumn Title="Name">
+                <ChildContent Context="q">
+                    <FluentButton Appearance="Appearance.Stealth"
+                                  Style="@GetQueueButtonStyle(q.Name)"
+                                  OnClick="@(() => SelectQueue(q.Name))">
+                        @q.Name
+                    </FluentButton>
+                </ChildContent>
+            </TemplateColumn>
+            <PropertyColumn Property="@(q => q.MessageCount)" Title="Messages" Sortable="true" />
+            <PropertyColumn Property="@(q => q.TotalBytesDisplay)" Title="Total Bytes" />
+        </FluentDataGrid>
+    </div>
+    <div>
+        <h3 style="margin:4px 0 8px;">Dequeued Messages (latest first)</h3>
+        @if (_messages.Count == 0)
+        {
+            <div style="font-size:.9em; color:var(--neutral-foreground-rest)">No messages dequeued yet.</div>
+        }
+        else
+        {
+            <div style="display:flex; flex-direction:column; gap:8px; max-height:420px; overflow:auto;">
+                @foreach (var m in _messages)
+                {
+                    <div style="padding:8px 10px; background:var(--neutral-fill-layer-rest); border-radius:6px; font-family:Consolas,monospace; font-size:.8rem; line-height:1.25;">
+                        <div style="display:flex; justify-content:space-between; gap:8px; margin-bottom:4px;">
+                            <strong>@m.Timestamp.ToString("u")</strong>
+                            <FluentButton Appearance="Appearance.Stealth" Style="padding:2px 6px;" OnClick="@(() => CopyAsync(m.Raw))">Copy</FluentButton>
+                        </div>
+                        <pre style="white-space:pre-wrap; margin:0;">@m.Display</pre>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@if (_toastVisible)
+{
+    <div style="position:fixed; right:16px; bottom:16px; z-index:1100; background:var(--accent-fill-rest); color:var(--foreground-on-accent-rest); padding:10px 14px; border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.24);">
+        @_toastMessage
+    </div>
+}
+
+@code {
+    private string GetQueueButtonStyle(string name) =>
+        string.Equals(name, _queueName, StringComparison.OrdinalIgnoreCase)
+            ? "font-weight:600; text-decoration:underline;"
+            : "font-weight:400;";
+
+    private void SelectQueue(string name)
+    {
+        _queueName = name;
+    }
+}
+
