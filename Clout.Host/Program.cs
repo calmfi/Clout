@@ -1,12 +1,13 @@
 using System.Text.Json;
+using Clout.Host;
+using Clout.Host.Functions;
+using Clout.Host.Queue;
+using Clout.Host.Storage;
 using Clout.Shared.Abstractions;
 using Clout.Shared.Models;
-using Clout.Host;
-using Clout.Host.Storage;
 using Microsoft.OpenApi.Any;
 using Microsoft.OpenApi.Models;
 using Quartz;
-using Clout.Host.Queue;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -46,6 +47,10 @@ builder.Services.AddOptions<QueueStorageOptions>()
     .Bind(builder.Configuration.GetSection("Queue"))
     .ValidateOnStart();
 builder.Services.AddSingleton<IAmqpQueueServer, DiskBackedAmqpQueueServer>();
+builder.Services.AddSingleton<FunctionExecutor>();
+builder.Services.AddSingleton<QueueTriggerDispatcher>();
+builder.Services.AddSingleton<IQueueTriggerDispatcher>(sp => sp.GetRequiredService<QueueTriggerDispatcher>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<QueueTriggerDispatcher>());
 builder.Services.AddQuartz(o =>
 {
     o.UseJobFactory<Quartz.Simpl.MicrosoftDependencyInjectionJobFactory>();
@@ -106,6 +111,19 @@ static async Task UnscheduleFunctionAsync(IScheduler scheduler, string blobId)
     await scheduler.DeleteJob(jobKey).ConfigureAwait(false);
 }
 
+static async Task SyncQueueTriggerAsync(BlobInfo blob, IQueueTriggerDispatcher dispatcher, CancellationToken cancellationToken)
+{
+    var queue = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "QueueTrigger", StringComparison.OrdinalIgnoreCase))?.Value;
+    var functionName = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+
+    if (string.IsNullOrWhiteSpace(queue) || string.IsNullOrWhiteSpace(functionName))
+    {
+        await dispatcher.DeactivateAsync(blob.Id, cancellationToken).ConfigureAwait(false);
+        return;
+    }
+
+    await dispatcher.ActivateAsync(blob.Id, functionName.Trim(), queue.Trim(), cancellationToken).ConfigureAwait(false);
+}
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
     {
@@ -581,12 +599,13 @@ app.MapPut("/api/blobs/{id}", async (string id, HttpRequest request, IBlobStorag
     .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
-app.MapPut("/api/blobs/{id}/metadata", async (string id, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPut("/api/blobs/{id}/metadata", async (string id, HttpRequest request, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
     {
         var meta = await request.ReadFromJsonAsync<List<BlobMetadata>>(cancellationToken: ct);
         if (meta is null) return Results.BadRequest("Invalid or missing JSON body.");
         var updated = await storage.SetMetadataAsync(id, meta, ct);
         if (updated is null) return Results.NotFound();
+        await SyncQueueTriggerAsync(updated, dispatcher, ct).ConfigureAwait(false);
         var json = JsonSerializer.Serialize(updated, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         return Results.Content(json, "application/json");
     })
@@ -596,10 +615,16 @@ app.MapPut("/api/blobs/{id}/metadata", async (string id, HttpRequest request, IB
     .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
-app.MapDelete("/api/blobs/{id}", async (string id, IBlobStorage storage, CancellationToken ct) =>
+app.MapDelete("/api/blobs/{id}", async (string id, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
     {
         var deleted = await storage.DeleteAsync(id, ct);
-        return deleted ? Results.NoContent() : Results.NotFound();
+        if (deleted)
+        {
+            await dispatcher.DeactivateAsync(id, ct).ConfigureAwait(false);
+            return Results.NoContent();
+        }
+
+        return Results.NotFound();
     })
     .WithName("DeleteBlob")
     .WithTags("Blobs")
@@ -954,6 +979,71 @@ app.MapGet("/api/functions/cron-next", (string expr, int? count) =>
     .WithTags("Functions")
     .WithDescription("Returns the next N occurrences for a valid NCRONTAB expression starting from now (UTC).")
     .WithOpenApi();
+// Queue trigger management
+app.MapPost("/api/functions/{id}/queue-trigger", async (string id, HttpRequest request, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
+    {
+        var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct);
+        if (payload is null || !payload.TryGetValue("queue", out var queue) || string.IsNullOrWhiteSpace(queue))
+        {
+            return Results.BadRequest("Body must include non-empty 'queue'.");
+        }
+
+        queue = queue.Trim();
+        var info = await storage.GetInfoAsync(id, ct);
+        if (info is null) return Results.NotFound();
+
+        var functionName = info.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+        if (string.IsNullOrWhiteSpace(functionName))
+        {
+            return Results.Text("Queue triggers require 'function.name' metadata on the blob.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+        }
+
+        var metadata = info.Metadata?.ToList() ?? new List<BlobMetadata>();
+        metadata.RemoveAll(m => string.Equals(m.Name, "QueueTrigger", StringComparison.OrdinalIgnoreCase));
+        metadata.Add(new BlobMetadata("QueueTrigger", "text/plain", queue));
+
+        var updated = await storage.SetMetadataAsync(id, metadata, ct);
+        if (updated is null) return Results.NotFound();
+
+        await SyncQueueTriggerAsync(updated, dispatcher, ct).ConfigureAwait(false);
+        var json = JsonSerializer.Serialize(updated, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Results.Content(json, "application/json");
+    })
+    .WithName("SetQueueTrigger")
+    .WithTags("Functions")
+    .WithDescription("Sets the QueueTrigger queue name on a function blob.")
+    .WithOpenApi(op =>
+    {
+        const string example = """
+        {
+          "queue": "incoming"
+        }
+        """;
+        if (op.RequestBody?.Content.TryGetValue("application/json", out var media) == true)
+        {
+            media.Example = new OpenApiString(example);
+        }
+        return op;
+    });
+
+app.MapDelete("/api/functions/{id}/queue-trigger", async (string id, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
+    {
+        var info = await storage.GetInfoAsync(id, ct);
+        if (info is null) return Results.NotFound();
+
+        var metadata = info.Metadata?.ToList() ?? new List<BlobMetadata>();
+        metadata.RemoveAll(m => string.Equals(m.Name, "QueueTrigger", StringComparison.OrdinalIgnoreCase));
+        var updated = await storage.SetMetadataAsync(id, metadata, ct);
+        if (updated is null) return Results.NotFound();
+
+        await SyncQueueTriggerAsync(updated, dispatcher, ct).ConfigureAwait(false);
+        var json = JsonSerializer.Serialize(updated, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Results.Content(json, "application/json");
+    })
+    .WithName("ClearQueueTrigger")
+    .WithTags("Functions")
+    .WithDescription("Removes the QueueTrigger queue binding from a function blob.")
+    .WithOpenApi();
 
 // Bulk schedule all functions referencing a given source DLL id
 app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
@@ -1048,3 +1138,10 @@ if (!disableQuartz)
 }
 
 await app.RunAsync(default);
+
+
+
+
+
+
+

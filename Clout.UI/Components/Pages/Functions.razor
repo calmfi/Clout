@@ -31,6 +31,7 @@
     <PropertyColumn Property="@(r => r.DeclaringType)" Title="Declaring Type" />
     <PropertyColumn Property="@(r => r.Verified)" Title="Verified" />
     <PropertyColumn Property="@(r => r.TimerTrigger)" Title="TimerTrigger" />
+    <PropertyColumn Property="@(r => r.QueueTrigger)" Title="QueueTrigger" />
     <TemplateColumn Title="Source DLL">
         <ChildContent Context="r">
             @if (!string.IsNullOrWhiteSpace(r.SourceId))
@@ -53,6 +54,11 @@
             {
                 <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => UnscheduleAsync(r))">Unschedule</FluentButton>
             }
+            <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => OpenQueueDialog(r))">@(string.IsNullOrWhiteSpace(r.QueueTrigger) ? "Bind Queue" : "Rebind Queue")</FluentButton>
+            @if (!string.IsNullOrWhiteSpace(r.QueueTrigger))
+            {
+                <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => ClearQueueAsync(r))">Unbind Queue</FluentButton>
+            }
             <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => DeleteAsync(r.Id))">Delete</FluentButton>
         </ChildContent>
     </TemplateColumn>
@@ -67,6 +73,33 @@
     </TemplateColumn>
 </FluentDataGrid>
 
+
+@if (_queueOpen)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;"
+         @onclick="CloseQueueDialog" tabindex="0" autofocus @onkeydown="HandleQueueKeyDown">
+        <fluent-dialog aria-label="Queue trigger" style="max-width:min(90vw, 520px); width:min(90vw, 520px);"
+                       @onclick:stopPropagation>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h2 style="margin:0; font-size:1.05rem;">Queue trigger: @_queueRow?.Name (@_queueId)</h2>
+                <FluentButton Appearance="Appearance.Stealth" OnClick="CloseQueueDialog">Close</FluentButton>
+            </div>
+            <div style="margin-top:16px; display:grid; gap:12px; grid-template-columns:120px 1fr; align-items:center;">
+                <div>Queue name</div>
+                <FluentTextField @bind-Value="_queueName" Style="width:100%;" />
+                <div></div>
+                <div style="display:flex; gap:8px;">
+                    <FluentButton Appearance="Appearance.Accent" OnClick="SaveQueueAsync">Save</FluentButton>
+                    <FluentButton Appearance="Appearance.Stealth" OnClick="CloseQueueDialog">Cancel</FluentButton>
+                </div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_queueError))
+            {
+                <div style="margin-top:12px;color:var(--neutral-foreground-rest);">Error: @_queueError</div>
+            }
+        </fluent-dialog>
+    </div>
+}
 @if (_schedOpen)
 {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;display:flex;align-items:center;justify-content:center;"
@@ -154,7 +187,7 @@
                                         {
                                             <span style="color:var(--neutral-foreground-rest); font-size:.85em;">optional</span>
                                         }
-                                        else if (BlobApiClient.IsValidCron(r.Cron))
+                                        else if (ApiClient.IsValidCron(r.Cron))
                                         {
                                             <span style="color:#0b6; font-size:.85em;">valid</span>
                                         }
@@ -234,6 +267,10 @@
     // Reschedule all dialog
 
 }
+
+
+
+
 
 
 

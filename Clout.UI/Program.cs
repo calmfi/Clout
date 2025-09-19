@@ -21,7 +21,7 @@ namespace Clout.UI
             _ = builder.Services.AddFluentUIComponents();
 
             // Typed HttpClient for the API
-            _ = builder.Services.AddHttpClient<Clout.Shared.BlobApiClient>(client =>
+            _ = builder.Services.AddHttpClient<Clout.Shared.ApiClient>(client =>
             {
                 client.BaseAddress = new Uri(apiBase.clientBase);
             });
@@ -103,3 +103,4 @@ namespace Clout.UI
         }
     }
 }
+

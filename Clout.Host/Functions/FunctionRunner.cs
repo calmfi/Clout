@@ -1,10 +1,11 @@
 using System.Reflection;
+using System.Text.Json;
 
 namespace Clout.Host.Functions;
 
 internal static class FunctionRunner
 {
-    public static async Task RunAsync(string assemblyPath, string methodName, CancellationToken cancellationToken)
+    public static async Task RunAsync(string assemblyPath, string methodName, JsonDocument? payload, CancellationToken cancellationToken)
     {
         // Load in isolated context to avoid locking and enable unloading
         var alc = new IsolatedLoadContext(assemblyPath);
@@ -18,21 +19,72 @@ internal static class FunctionRunner
                 types = ex.Types.Where(t => t is not null).Cast<Type>().ToArray();
             }
 
+            var hasPayload = payload is not null;
+
             foreach (var t in types)
             {
-                // Prefer static, then instance methods; require zero parameters for now.
-                var method = t.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance, binder: null, types: Type.EmptyTypes, modifiers: null);
-                if (method is null) continue;
+                // Gather all public methods with the requested name.
+                var candidates = t.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
+                    .Where(m => string.Equals(m.Name, methodName, StringComparison.Ordinal))
+                    .ToArray();
+
+                if (candidates.Length == 0) continue;
+
+                MethodInfo? selected = null;
+                object?[] arguments = Array.Empty<object?>();
+
+                if (hasPayload)
+                {
+                    foreach (var candidate in candidates)
+                    {
+                        var parameters = candidate.GetParameters();
+                        if (parameters.Length != 1) continue;
+
+                        var parameterType = parameters[0].ParameterType;
+                        if (parameterType == typeof(JsonElement))
+                        {
+                            selected = candidate;
+                            arguments = new object?[] { payload!.RootElement };
+                            break;
+                        }
+
+                        if (parameterType == typeof(JsonDocument))
+                        {
+                            selected = candidate;
+                            arguments = new object?[] { payload };
+                            break;
+                        }
+
+                        if (parameterType == typeof(string))
+                        {
+                            var root = payload!.RootElement;
+                            var stringValue = root.ValueKind == JsonValueKind.String ? root.GetString() : root.GetRawText();
+                            selected = candidate;
+                            arguments = new object?[] { stringValue };
+                            break;
+                        }
+                    }
+                }
+
+                // Fallback to parameterless invocation when no single-parameter match was found.
+                selected ??= candidates.FirstOrDefault(m => m.GetParameters().Length == 0);
+
+                if (selected is null) continue;
+
+                if (selected.GetParameters().Length == 0)
+                {
+                    arguments = Array.Empty<object?>();
+                }
 
                 object? instance = null;
-                if (!method.IsStatic)
+                if (!selected.IsStatic)
                 {
                     var ctor = t.GetConstructor(Type.EmptyTypes);
                     if (ctor is null) continue;
                     instance = Activator.CreateInstance(t);
                 }
 
-                var result = method.Invoke(instance, null);
+                var result = selected.Invoke(instance, arguments);
                 // If the function returns a Task, await it.
                 if (result is Task task)
                 {
@@ -42,7 +94,7 @@ internal static class FunctionRunner
                 return;
             }
 
-            throw new MissingMethodException($"No public parameterless method named '{methodName}' was found.");
+            throw new MissingMethodException($"No public method named '{methodName}' was found with a compatible signature.");
         }
         finally
         {
@@ -56,5 +108,5 @@ internal static class FunctionRunner
         }
     }
 
-
 }
+

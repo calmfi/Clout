@@ -21,7 +21,7 @@ namespace Clout.UI.Components.Pages
             public string Display { get; set; } = string.Empty;
         }
 
-        [Inject] private Clout.Shared.BlobApiClient Api { get; set; } = default!;
+        [Inject] private Clout.Shared.ApiClient Api { get; set; } = default!;
         [Inject] private IJSRuntime JS { get; set; } = default!;
 
         private readonly List<QueueRow> _queues = new();

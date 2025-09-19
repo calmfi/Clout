@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Collections.Generic;
 using Clout.Shared.Models;
 using Quartz;
 using System.Text;
@@ -11,7 +12,7 @@ namespace Clout.Shared;
 /// Minimal client for interacting with the Local Cloud API.
 /// Cancellation: see AGENTS.md section "Cancellation and Async".
 /// </summary>
-public sealed class BlobApiClient : IDisposable
+public sealed class ApiClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly bool _ownsHttpClient;
@@ -19,7 +20,7 @@ public sealed class BlobApiClient : IDisposable
     /// Initializes a new client with the specified API base address.
     /// </summary>
     /// <param name="baseAddress">Base URL of the API (e.g., http://localhost:5000).</param>
-    public BlobApiClient(string baseAddress)
+    public ApiClient(string baseAddress)
     {
         _http = new HttpClient { BaseAddress = new Uri(baseAddress) };
         _ownsHttpClient = true;
@@ -30,7 +31,7 @@ public sealed class BlobApiClient : IDisposable
     /// The HttpClient's BaseAddress should be set by the caller.
     /// </summary>
     /// <param name="http">Configured HttpClient instance.</param>
-    public BlobApiClient(HttpClient http)
+    public ApiClient(HttpClient http)
     {
         _http = http;
         _ownsHttpClient = false;
@@ -418,6 +419,42 @@ public sealed class BlobApiClient : IDisposable
     }
 
     /// <summary>
+    /// Sets the QueueTrigger queue name for a function blob.
+    /// </summary>
+    /// <param name="id">Function blob identifier.</param>
+    /// <param name="queue">Queue name to bind.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Updated blob metadata.</returns>
+    public async Task<BlobInfo> SetQueueTriggerAsync(string id, string queue, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Value cannot be null or whitespace.", nameof(id));
+        if (string.IsNullOrWhiteSpace(queue)) throw new ArgumentException("Value cannot be null or whitespace.", nameof(queue));
+
+        var payload = new Dictionary<string, string> { ["queue"] = queue };
+        using var response = await _http.PostAsJsonAsync(new Uri($"/api/functions/{Uri.EscapeDataString(id)}/queue-trigger", UriKind.Relative), payload, AppJsonContext.Default.DictionaryStringString, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken).ConfigureAwait(false);
+        return result!;
+    }
+
+    /// <summary>
+    /// Removes the QueueTrigger metadata entry from the blob, if present.
+    /// </summary>
+    /// <param name="id">Function blob identifier.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Updated blob metadata.</returns>
+    public async Task<BlobInfo> ClearQueueTriggerAsync(string id, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Value cannot be null or whitespace.", nameof(id));
+
+        using var response = await _http.DeleteAsync(new Uri($"/api/functions/{Uri.EscapeDataString(id)}/queue-trigger", UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync(AppJsonContext.Default.BlobInfo, cancellationToken).ConfigureAwait(false);
+        return result!;
+    }
+
+
+    /// <summary>
     /// Gets next occurrences for a cron expression from the server.
     /// </summary>
     public async Task<List<string>> CronNextAsync(string expr, int count = 5, CancellationToken cancellationToken = default)
@@ -460,3 +497,6 @@ public sealed class BlobApiClient : IDisposable
         return dict != null && dict.TryGetValue("count", out var c) ? c : 0;
     }
 }
+
+
+

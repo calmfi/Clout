@@ -36,7 +36,7 @@ if (args.Length == 0)
 }
 
 var apiBase = apiOpt ?? "http://localhost:5000";
-var client = new BlobApiClient(apiBase);
+var client = new ApiClient(apiBase);
 
 try
 {
@@ -459,8 +459,34 @@ try
                             Console.WriteLine(JsonSerializer.Serialize(result, AppJsonContext.Default.BlobInfo));
                             return 0;
                         }
-                    default:
-                        return Fail("Supported: functions list|register|register-many|register-from|register-many-from|schedule|unschedule");
+                                        case "bind-queue":
+                        {
+                            if (args.Length < 4)
+                            {
+                                return Fail("Usage: functions bind-queue <id> <queue>");
+                            }
+
+                            var id = args[2];
+                            var queue = args[3];
+                            BlobInfo result = await client.SetQueueTriggerAsync(id, queue, ct).ConfigureAwait(false);
+                            Console.WriteLine(JsonSerializer.Serialize(result, AppJsonContext.Default.BlobInfo));
+                            return 0;
+                        }
+                    case "unbind-queue":
+                    case "clear-queue":
+                        {
+                            if (args.Length < 3)
+                            {
+                                return Fail("Usage: functions unbind-queue <id>");
+                            }
+
+                            var id = args[2];
+                            BlobInfo result = await client.ClearQueueTriggerAsync(id, ct).ConfigureAwait(false);
+                            Console.WriteLine(JsonSerializer.Serialize(result, AppJsonContext.Default.BlobInfo));
+                            return 0;
+                        }
+default:
+                        return Fail("Supported: functions list|register|register-many|register-from|register-many-from|schedule|unschedule|bind-queue|unbind-queue");
                 }
             }
 
@@ -506,8 +532,14 @@ void PrintUsage()
     Console.WriteLine("  clout functions register-many-from <dllBlobId> <name1> [<name2> ...] [--runtime <r>] [--cron <expr>]");
     Console.WriteLine("  clout functions schedule <id> <ncrontab>");
     Console.WriteLine("  clout functions unschedule <id>");
-    Console.WriteLine("  clout functions cron-next <ncrontab> [count=5]");
+    Console.WriteLine("  clout functions bind-queue <id> <queue>");
+    Console.WriteLine("  clout functions unbind-queue <id>");
+Console.WriteLine("  clout functions cron-next <ncrontab> [count=5]");
     Console.WriteLine();
     Console.WriteLine("Optional: --api <url> to set API base (default http://localhost:5000)");
 }
 // Types moved to separate files.
+
+
+
+

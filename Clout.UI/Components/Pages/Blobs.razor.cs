@@ -13,7 +13,7 @@ public partial class Blobs
     private bool _loading;
     private string? _error;
     private string _query = string.Empty;
-    [Inject] private BlobApiClient Api { get; set; } = default!;
+    [Inject] private ApiClient Api { get; set; } = default!;
     [Inject] private AppConfig Config { get; set; } = default!;
 
     protected override async Task OnInitializedAsync()
@@ -294,3 +294,4 @@ public partial class Blobs
         await InvokeAsync(StateHasChanged).ConfigureAwait(true);
     }
 }
+

@@ -9,7 +9,7 @@ Local, file-backed building blocks (blobs, queues, scheduled functions) exposed 
 Clout.slnx
 ├─ Clout.Host/              # ASP.NET Core Minimal API (blobs, queues, functions, scheduling)
 ├─ Clout.Client/            # Console CLI for interacting with the API
-├─ Clout.Shared/            # Shared contracts & client (`BlobInfo`, `BlobMetadata`, `BlobApiClient`, queue + function models)
+├─ Clout.Shared/            # Shared contracts & client (`BlobInfo`, `BlobMetadata`, `ApiClient`, queue + function models)
 ├─ Clout.ServiceDefaults/   # Shared service defaults (Aspire wiring)
 ├─ Clout.AppHost/           # .NET Aspire AppHost (runs API + UI together)
 ├─ Clout.UI/                # UI (discovers API via Aspire or configured base URL)
@@ -256,3 +256,4 @@ Use Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, etc.). Run `dotnet 
 ## License
 
 TBD
+

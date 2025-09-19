@@ -1,16 +1,15 @@
-using Clout.Shared.Abstractions;
 using Quartz;
 
 namespace Clout.Host.Functions;
 
 public sealed class FunctionInvocationJob : IJob
 {
-    private readonly IBlobStorage _storage;
+    private readonly FunctionExecutor _executor;
     private readonly ILogger<FunctionInvocationJob> _logger;
 
-    public FunctionInvocationJob(IBlobStorage storage, ILogger<FunctionInvocationJob> logger)
+    public FunctionInvocationJob(FunctionExecutor executor, ILogger<FunctionInvocationJob> logger)
     {
-        _storage = storage;
+        _executor = executor;
         _logger = logger;
     }
 
@@ -28,32 +27,11 @@ public sealed class FunctionInvocationJob : IJob
 
         try
         {
-            await using var stream = await _storage.OpenReadAsync(blobId, ct).ConfigureAwait(false);
-            if (stream is null)
-            {
-                _logger.LogWarning("Blob {BlobId} not found for function {Function}", blobId, functionName);
-                return;
-            }
-
-            var temp = Path.Combine(Path.GetTempPath(), $"clout_fn_{blobId}_{Guid.NewGuid():N}.dll");
-            await using (var fs = File.Create(temp))
-            {
-                await stream.CopyToAsync(fs, ct).ConfigureAwait(false);
-            }
-
-            try
-            {
-                await FunctionRunner.RunAsync(temp, functionName, ct).ConfigureAwait(false);
-                _logger.LogInformation("Function {Function} completed for blob {BlobId}", functionName, blobId);
-            }
-            finally
-            {
-                try { File.Delete(temp); } catch { /* ignore */ }
-            }
+            await _executor.ExecuteAsync(blobId!, functionName!, null, ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _logger.LogError(ex, "Function {Function} failed for blob {BlobId}", functionName, blobId);
+            // Cancellation was requested, no-op.
         }
     }
 }

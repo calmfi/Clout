@@ -17,7 +17,7 @@
 ## Coding Style & Naming Conventions
 - C# with nullable enabled; 4-space indentation; file-scoped namespaces.
 - Naming: PascalCase (types/members), camelCase (locals/params), `_camelCase` (private fields).
-- One public type per file; filename matches type (e.g., `BlobApiClient.cs`).
+- One public type per file; filename matches type (e.g., `ApiClient.cs`).
 - Prefer `var` when the type is obvious; avoid abbreviations.
 
 ## Shared Contracts
@@ -51,3 +51,4 @@
 ## Agent-Specific Instructions
 - Respect this file's scope. Do not add `.sln` files; keep using `Clout.slnx` and `dotnet` CLI.
 - Keep changes minimal, focused, and consistent with existing style. Update docs when behavior changes.
+

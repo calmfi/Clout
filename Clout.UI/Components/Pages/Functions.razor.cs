@@ -15,7 +15,12 @@ public partial class Functions
     private bool _loading;
     private string? _error;
     private string _query = string.Empty;
-    [Inject] private BlobApiClient Api { get; set; } = default!;
+    private bool _queueOpen;
+    private string _queueId = string.Empty;
+    private string _queueName = string.Empty;
+    private string? _queueError;
+    private FunctionRow? _queueRow;
+    [Inject] private ApiClient Api { get; set; } = default!;
     [Inject] private AppConfig Config { get; set; } = default!;
     [Inject] private NavigationManager Nav { get; set; } = default!;
 
@@ -72,6 +77,7 @@ public partial class Functions
         DeclaringType = Meta(b, "function.declaringType"),
         Verified = Meta(b, "function.verified"),
         TimerTrigger = Meta(b, "TimerTrigger"),
+        QueueTrigger = Meta(b, "QueueTrigger"),
         SourceId = Meta(b, "function.sourceId")
     };
 
@@ -121,6 +127,7 @@ public partial class Functions
         public string DeclaringType { get; set; } = string.Empty;
         public string Verified { get; set; } = string.Empty;
         public string TimerTrigger { get; set; } = string.Empty;
+        public string QueueTrigger { get; set; } = string.Empty;
         public string? SourceId { get; set; }
     }
 
@@ -139,6 +146,95 @@ public partial class Functions
             _error = ex.Message;
         }
     }
+
+
+    private void OpenQueueDialog(FunctionRow row)
+    {
+        _queueRow = row;
+        _queueId = row.Id;
+        _queueName = row.QueueTrigger ?? string.Empty;
+        _queueError = null;
+        _queueOpen = true;
+        StateHasChanged();
+    }
+
+    private void CloseQueueDialog()
+    {
+        _queueOpen = false;
+        _queueRow = null;
+        _queueError = null;
+        StateHasChanged();
+    }
+
+    private async Task SaveQueueAsync()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_queueName))
+            {
+                _queueError = "Provide a queue name.";
+                return;
+            }
+
+            var queue = _queueName.Trim();
+            var updated = await Api.SetQueueTriggerAsync(_queueId, queue).ConfigureAwait(true);
+            _queueName = queue;
+            var value = Meta(updated, "QueueTrigger");
+            if (_queueRow is not null)
+            {
+                _queueRow.QueueTrigger = value;
+            }
+            else
+            {
+                var match = _functions.FirstOrDefault(f => string.Equals(f.Id, _queueId, StringComparison.OrdinalIgnoreCase));
+                if (match is not null)
+                {
+                    match.QueueTrigger = value;
+                }
+            }
+
+            ApplyFilter();
+            CloseQueueDialog();
+            ShowToast($"Bound queue '{_queueName}'.");
+        }
+        catch (HttpRequestException ex)
+        {
+            _queueError = ex.Message;
+        }
+        catch (ArgumentException ex)
+        {
+            _queueError = ex.Message;
+        }
+    }
+
+    private async Task ClearQueueAsync(FunctionRow row)
+    {
+        try
+        {
+            if (!await Confirm($"Unbind queue trigger for {row.Name} ({row.Id})?").ConfigureAwait(true)) return;
+            var updated = await Api.ClearQueueTriggerAsync(row.Id).ConfigureAwait(true);
+            row.QueueTrigger = Meta(updated, "QueueTrigger");
+            if (_queueRow is not null && string.Equals(_queueRow.Id, row.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                CloseQueueDialog();
+            }
+            ApplyFilter();
+            ShowToast("Queue trigger cleared.");
+        }
+        catch (HttpRequestException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void HandleQueueKeyDown(KeyboardEventArgs e)
+    {
+        if (string.Equals(e.Key, "Escape", StringComparison.OrdinalIgnoreCase))
+        {
+            CloseQueueDialog();
+        }
+    }
+
 
     private async Task DeleteAsync(string id)
     {
@@ -225,7 +321,7 @@ public partial class Functions
                 return;
             }
 
-            if (!BlobApiClient.IsValidCron(_schedCron))
+            if (!ApiClient.IsValidCron(_schedCron))
             {
                 _schedError = "Invalid NCRONTAB expression.";
                 return;
@@ -360,7 +456,7 @@ public partial class Functions
                 return;
             }
 
-            if (!BlobApiClient.IsValidCron(_reAllCron))
+            if (!ApiClient.IsValidCron(_reAllCron))
             {
                 _reAllError = "Invalid NCRONTAB expression.";
                 return;
@@ -420,7 +516,7 @@ public partial class Functions
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            if (!_perRow && !string.IsNullOrWhiteSpace(_regCron) && !BlobApiClient.IsValidCron(_regCron))
+            if (!_perRow && !string.IsNullOrWhiteSpace(_regCron) && !ApiClient.IsValidCron(_regCron))
             {
                 _regError = "Invalid NCRONTAB expression.";
                 return;
@@ -429,7 +525,7 @@ public partial class Functions
             if (_perRow)
             {
                 foreach (var r in _rows)
-                    if (!string.IsNullOrWhiteSpace(r.Cron) && !BlobApiClient.IsValidCron(r.Cron))
+                    if (!string.IsNullOrWhiteSpace(r.Cron) && !ApiClient.IsValidCron(r.Cron))
                     {
                         _regError = $"Invalid cron for '{r.Name}'.";
                         return;
@@ -505,3 +601,16 @@ public partial class Functions
             CloseRescheduleAllDialog();
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
