@@ -168,51 +168,74 @@
                 <div>Names</div>
                 <div>
                     <textarea style="width:100%; min-height:120px;" @bind="_regNames" placeholder="One per line or comma-separated"></textarea>
-                    <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
-                        <FluentButton Appearance="Appearance.Stealth" OnClick="SyncRowsFromNames">Sync rows from names</FluentButton>
-                        <FluentSwitch @bind-Checked="_perRow">Per-function cron</FluentSwitch>
-                    </div>
+                    @if (_regTrigger == FunctionTriggerKind.Timer)
+                    {
+                        <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+                            <FluentButton Appearance="Appearance.Stealth" OnClick="SyncRowsFromNames">Sync rows from names</FluentButton>
+                            <FluentSwitch @bind-Checked="_perRow">Per-function cron</FluentSwitch>
+                        </div>
+                    }
                 </div>
-                @if (_perRow)
+                <div>Trigger</div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <FluentSelect TOption="string" Style="width:240px" @bind-Value="_regTriggerValue">
+                        <FluentOption TOption="string" Value="@FunctionTriggerKind.Timer.ToString()">Timer triggered</FluentOption>
+                        <FluentOption TOption="string" Value="@FunctionTriggerKind.Queue.ToString()">Queue message</FluentOption>
+                    </FluentSelect>
+                </div>
+                @if (_regTrigger == FunctionTriggerKind.Timer)
                 {
-                    <div>Per-function schedule</div>
-                    <div>
-                        <FluentDataGrid TGridItem="Functions.FuncRow" Items="@_rows.AsQueryable()" RowsPerPage="10" GridHeight="40vh" Density="Density.Compact">
-                            <PropertyColumn Property="@(r => r.Name)" Title="Name" />
-                            <TemplateColumn Title="Cron">
-                                <ChildContent Context="r">
-                                    <div style="display:flex; gap:8px; align-items:center;">
-                                        <FluentTextField Style="flex:1" @bind-Value="r.Cron" />
-                                        @if (string.IsNullOrWhiteSpace(r.Cron))
-                                        {
-                                            <span style="color:var(--neutral-foreground-rest); font-size:.85em;">optional</span>
-                                        }
-                                        else if (ApiClient.IsValidCron(r.Cron))
-                                        {
-                                            <span style="color:#0b6; font-size:.85em;">valid</span>
-                                        }
-                                        else
-                                        {
-                                            <span style="color:#c33; font-size:.85em;">invalid</span>
-                                        }
-                                    </div>
-                                </ChildContent>
-                            </TemplateColumn>
-                            <TemplateColumn Title="">
-                                <ChildContent Context="r"><FluentButton Appearance="Appearance.Stealth" OnClick="@(() => RemoveFuncRow(r))">Remove</FluentButton></ChildContent>
-                            </TemplateColumn>
-                        </FluentDataGrid>
-                        <div style="margin-top:6px;"><FluentButton Appearance="Appearance.Stealth" OnClick="AddFuncRow">Add Row</FluentButton></div>
-                    </div>
-                }
-                else
-                {
-                    <div>Cron (optional)</div>
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <FluentTextField @bind-Value="_regCron" @oninput="(e => ComputeCronPreview())" Placeholder="e.g. */5 * * * *" Style="flex:1" />
-                        <FluentButton Appearance="Appearance.Stealth" OnClick="ComputeCronPreview">Preview</FluentButton>
-                    </div>
-                    @if (_cronPreview.Count > 0)
+                    if (_perRow)
+                    {
+                        <div>Per-function schedule</div>
+                        <div>
+                            <FluentDataGrid TGridItem="Functions.FuncRow" Items="@_rows.AsQueryable()" RowsPerPage="10" GridHeight="40vh" Density="Density.Compact">
+                                <PropertyColumn Property="@(r => r.Name)" Title="Name" />
+                                <TemplateColumn Title="Cron">
+                                    <ChildContent Context="r">
+                                        <div style="display:flex; gap:8px; align-items:center;">
+                                            <FluentTextField Style="flex:1" @bind-Value="r.Cron" />
+                                            @if (string.IsNullOrWhiteSpace(r.Cron))
+                                            {
+                                                <span style="color:var(--neutral-foreground-rest); font-size:.85em;">optional</span>
+                                            }
+                                            else if (ApiClient.IsValidCron(r.Cron))
+                                            {
+                                                <span style="color:#0b6; font-size:.85em;">valid</span>
+                                            }
+                                            else
+                                            {
+                                                <span style="color:#c33; font-size:.85em;">invalid</span>
+                                            }
+                                        </div>
+                                    </ChildContent>
+                                </TemplateColumn>
+                                <TemplateColumn Title="">
+                                    <ChildContent Context="r"><FluentButton Appearance="Appearance.Stealth" OnClick="@(() => RemoveFuncRow(r))">Remove</FluentButton></ChildContent>
+                                </TemplateColumn>
+                            </FluentDataGrid>
+                            <div style="margin-top:6px;"><FluentButton Appearance="Appearance.Stealth" OnClick="AddFuncRow">Add Row</FluentButton></div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div>Cron (optional)</div>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <FluentTextField @bind-Value="_regCron" @oninput="(e => ComputeCronPreview())" Placeholder="e.g. */5 * * * *" Style="flex:1" />
+                            <FluentButton Appearance="Appearance.Stealth" OnClick="ComputeCronPreview">Preview</FluentButton>
+                        </div>
+                        @if (_cronPreview.Count > 0)
+                        {
+                            <div></div>
+                            <div style="font-size:.9em; color:var(--neutral-foreground-rest);">
+                                Next runs:
+                                <ul style="margin:6px 0 0 18px;">
+                                    @foreach (var t in _cronPreview) { <li>@t</li> }
+                                </ul>
+                            </div>
+                        }
+                    }
+                    if (_cronPreview.Count > 0)
                     {
                         <div></div>
                         <div style="font-size:.9em; color:var(--neutral-foreground-rest);">
@@ -223,14 +246,12 @@
                         </div>
                     }
                 }
-                @if (_cronPreview.Count > 0)
+                else if (_regTrigger == FunctionTriggerKind.Queue)
                 {
-                    <div></div>
-                    <div style="font-size:.9em; color:var(--neutral-foreground-rest);">
-                        Next runs:
-                        <ul style="margin:6px 0 0 18px;">
-                            @foreach (var t in _cronPreview) { <li>@t</li> }
-                        </ul>
+                    <div>Queue name</div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <FluentTextField Style="flex:1" @bind-Value="_regQueueName" Placeholder="e.g. processing-queue" />
+                        <span style="color:var(--neutral-foreground-rest); font-size:.85em;">required</span>
                     </div>
                 }
                 <div>Runtime</div>
@@ -267,11 +288,3 @@
     // Reschedule all dialog
 
 }
-
-
-
-
-
-
-
-

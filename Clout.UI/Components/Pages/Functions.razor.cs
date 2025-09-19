@@ -350,10 +350,27 @@ public partial class Functions
     private string _regNames = string.Empty;
     private string _regRuntime = "dotnet";
     private string _regCron = string.Empty;
+    private FunctionTriggerKind _regTrigger = FunctionTriggerKind.Timer;
+    private string _regQueueName = string.Empty;
     private readonly List<string> _cronPreview = new();
     private bool _perRow;
     private readonly List<FuncRow> _rows = new();
     private string? _regError;
+    private string _regTriggerValue
+    {
+        get => _regTrigger.ToString();
+        set
+        {
+            if (Enum.TryParse<FunctionTriggerKind>(value, true, out var parsed))
+            {
+                if (_regTrigger != parsed)
+                {
+                    _regTrigger = parsed;
+                    OnRegisterTriggerChanged(parsed);
+                }
+            }
+        }
+    }
     private bool _reAllOpen;
     private string _reAllSourceId = string.Empty;
     private string _reAllCron = string.Empty;
@@ -365,10 +382,36 @@ public partial class Functions
         _regFile = null;
         _regNames = string.Empty;
         _regRuntime = "dotnet";
+        _regCron = string.Empty;
+        _regTrigger = FunctionTriggerKind.Timer;
+        _regQueueName = string.Empty;
+        _cronPreview.Clear();
+        _perRow = false;
+        _rows.Clear();
         _regError = null;
     }
 
     private void CloseRegisterManyDialog() => _regOpen = false;
+
+    private void OnRegisterTriggerChanged(FunctionTriggerKind kind)
+    {
+        if (kind == FunctionTriggerKind.Queue)
+        {
+            if (_perRow)
+            {
+                _perRow = false;
+                _rows.Clear();
+            }
+            _regCron = string.Empty;
+            _cronPreview.Clear();
+        }
+        else if (kind == FunctionTriggerKind.Timer)
+        {
+            _regQueueName = string.Empty;
+        }
+
+        StateHasChanged();
+    }
 
     private void HandleRegisterKeyDown(KeyboardEventArgs e)
     {
@@ -382,6 +425,12 @@ public partial class Functions
 
     private async void ComputeCronPreview()
     {
+
+        if (_regTrigger != FunctionTriggerKind.Timer)
+        {
+            _cronPreview.Clear();
+            StateHasChanged(); return;
+        }
         _cronPreview.Clear();
         var expr = _regCron?.Trim();
         if (string.IsNullOrWhiteSpace(expr))
@@ -406,6 +455,10 @@ public partial class Functions
 
     private void SyncRowsFromNames()
     {
+        if (_regTrigger != FunctionTriggerKind.Timer)
+        {
+            return;
+        }
         var set = new HashSet<string>(_rows.Select(r => r.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var n in (_regNames ?? string.Empty).Split(NameSplitSeparators,
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -434,6 +487,12 @@ public partial class Functions
         public string Name { get; set; } = string.Empty;
         public string? Cron { get; set; }
     }
+    private enum FunctionTriggerKind
+    {
+        Timer,
+        Queue
+    }
+
 
     private void OpenRescheduleAllDialog(string sourceId, string anyName)
     {
@@ -511,25 +570,40 @@ public partial class Functions
                 return;
             }
 
+            var trigger = _regTrigger;
+            var queueName = (_regQueueName ?? string.Empty).Trim();
+
+            if (trigger == FunctionTriggerKind.Queue && string.IsNullOrWhiteSpace(queueName))
+            {
+                _regError = "Provide a queue name.";
+                return;
+            }
+
             var names = (_regNames ?? string.Empty)
                 .Split(NameSplitSeparators,
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            if (!_perRow && !string.IsNullOrWhiteSpace(_regCron) && !ApiClient.IsValidCron(_regCron))
-            {
-                _regError = "Invalid NCRONTAB expression.";
-                return;
-            }
 
-            if (_perRow)
+            if (trigger == FunctionTriggerKind.Timer)
             {
-                foreach (var r in _rows)
-                    if (!string.IsNullOrWhiteSpace(r.Cron) && !ApiClient.IsValidCron(r.Cron))
+                if (!_perRow && !string.IsNullOrWhiteSpace(_regCron) && !ApiClient.IsValidCron(_regCron))
+                {
+                    _regError = "Invalid NCRONTAB expression.";
+                    return;
+                }
+
+                if (_perRow)
+                {
+                    foreach (var r in _rows)
                     {
-                        _regError = $"Invalid cron for '{r.Name}'.";
-                        return;
+                        if (!string.IsNullOrWhiteSpace(r.Cron) && !ApiClient.IsValidCron(r.Cron))
+                        {
+                            _regError = $"Invalid cron for '{r.Name}'.";
+                            return;
+                        }
                     }
+                }
             }
 
             if (names.Length == 0 && _rows.Count == 0)
@@ -544,20 +618,26 @@ public partial class Functions
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             }
 
+            string? cronToSend = null;
+            if (trigger == FunctionTriggerKind.Timer && !_perRow && !string.IsNullOrWhiteSpace(_regCron))
+            {
+                cronToSend = _regCron;
+            }
+
             List<BlobInfo> result;
             if (!string.IsNullOrWhiteSpace(_regExistingId))
             {
                 result = await Api.RegisterFunctionsFromExistingAsync(_regExistingId!, names, _regRuntime,
-                    _perRow ? null : _regCron).ConfigureAwait(true);
+                    cronToSend).ConfigureAwait(true);
             }
             else
             {
                 using var stream = _regFile!.OpenReadStream(50 * 1024 * 1024); // 50 MB limit
                 result = await Api.RegisterFunctionsAsync(stream, _regFile!.Name, names, _regRuntime,
-                    _perRow ? null : _regCron).ConfigureAwait(true);
+                    cronToSend).ConfigureAwait(true);
             }
 
-            if (_perRow && result.Count == names.Length)
+            if (trigger == FunctionTriggerKind.Timer && _perRow && result.Count == names.Length)
             {
                 var map = _rows.Where(r => !string.IsNullOrWhiteSpace(r.Cron))
                     .ToDictionary(r => r.Name, r => r.Cron!, StringComparer.OrdinalIgnoreCase);
@@ -579,8 +659,20 @@ public partial class Functions
                 }
             }
 
+            string toast;
+            if (trigger == FunctionTriggerKind.Queue)
+            {
+                _regQueueName = queueName;
+                await BindQueueTriggersAsync(result, queueName).ConfigureAwait(true);
+                toast = await BuildQueueToastAsync(queueName, result.Count).ConfigureAwait(true);
+            }
+            else
+            {
+                toast = $"Registered {result.Count} functions.";
+            }
+
             _regOpen = false;
-            ShowToast($"Registered {result.Count} functions.");
+            ShowToast(toast);
             await LoadAsync().ConfigureAwait(true);
         }
         catch (HttpRequestException ex)
@@ -588,7 +680,49 @@ public partial class Functions
             _regError = ex.Message;
         }
     }
+    private async Task BindQueueTriggersAsync(IReadOnlyList<BlobInfo> items, string queueName)
+    {
+        foreach (var blob in items)
+        {
+            try
+            {
+                await Api.SetQueueTriggerAsync(blob.Id, queueName).ConfigureAwait(true);
+            }
+            catch (HttpRequestException)
+            {
+            }
+            catch (ArgumentException)
+            {
+            }
+        }
+    }
 
+    private async Task<string> BuildQueueToastAsync(string queueName, int count)
+    {
+        var stats = await TryGetQueueStatsAsync(queueName).ConfigureAwait(true);
+        if (stats is null)
+        {
+            return $"Registered {count} queue-triggered functions for queue '{queueName}'.";
+        }
+
+        var pending = stats.MessageCount;
+        var suffix = pending == 1 ? "message" : "messages";
+        var availability = pending > 0 ? $"{pending} pending {suffix}" : "no pending messages";
+        return $"Registered {count} queue-triggered functions. Queue '{queueName}' currently has {availability}.";
+    }
+
+    private async Task<QueueStats?> TryGetQueueStatsAsync(string queueName)
+    {
+        try
+        {
+            var queues = await Api.ListQueuesAsync().ConfigureAwait(true);
+            return queues.FirstOrDefault(q => string.Equals(q.Name, queueName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
     private void HandleScheduleKeyDown(KeyboardEventArgs e)
     {
         if (string.Equals(e.Key, "Escape", StringComparison.OrdinalIgnoreCase))
@@ -601,16 +735,5 @@ public partial class Functions
             CloseRescheduleAllDialog();
     }
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
