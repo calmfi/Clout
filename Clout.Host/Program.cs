@@ -5,8 +5,8 @@ using Clout.Host.Queue;
 using Clout.Host.Storage;
 using Clout.Shared.Abstractions;
 using Clout.Shared.Models;
-using Microsoft.OpenApi.Any;
-using Microsoft.OpenApi.Models;
+// using Microsoft.OpenApi.Any;
+// using Microsoft.OpenApi.Models;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,25 +19,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddOpenTelemetry();
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "Clout API",
-        Version = "v1",
-        Description = "Local API for blob storage, function registration/scheduling, and a lightweight disk-backed queue."
-    });
-
-    // Include XML docs from built assemblies to enrich Swagger
-    try
-    {
-        foreach (var xml in Directory.GetFiles(AppContext.BaseDirectory, "*.xml"))
-        {
-            c.IncludeXmlComments(xml, includeControllerXmlComments: true);
-        }
-    }
-    catch { /* best-effort */ }
-});
+// builder.Services.AddSwaggerGen(...); // Removed Swashbuckle
 
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");
 Directory.CreateDirectory(storageRoot);
@@ -64,11 +46,11 @@ var app = builder.Build();
 
 app.MapDefaultEndpoints();
 
-app.UseSwagger();
+// app.UseSwagger(); // Removed Swashbuckle
+// app.UseSwaggerUI(); // Removed Swashbuckle
+app.MapOpenApi(); // Built-in OpenApi endpoint
 
 app.UseWebSockets();
-
-app.UseSwaggerUI();
 
 var logger = app.Logger;
 
@@ -134,26 +116,7 @@ app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
     .WithName("ListBlobs")
     .WithTags("Blobs")
     .WithDescription("List all blobs with metadata.")
-    .WithOpenApi(op =>
-    {
-        var example = """
-        [
-          {
-            "id": "a1b2c3",
-            "fileName": "hello.txt",
-            "size": 11,
-            "createdUtc": "2025-09-13T21:20:00Z",
-            "contentType": "text/plain",
-            "metadata": []
-          }
-        ]
-        """;
-        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 // Queue health and AMQP-like endpoints
 app.MapGet("/health", () => Results.Text("OK\n", "text/plain"))
@@ -252,30 +215,7 @@ app.MapGet("/api/functions", async (IBlobStorage storage, CancellationToken ct) 
     .WithName("ListFunctions")
     .WithTags("Functions")
     .WithDescription("List all registered functions (identified by 'function.name' metadata).")
-    .WithOpenApi(op =>
-    {
-        var example = """
-        [
-          {
-            "id": "f1a2b3",
-            "fileName": "MyFunction.dll",
-            "size": 12345,
-            "createdUtc": "2025-09-13T21:20:00Z",
-            "contentType": "application/octet-stream",
-            "metadata": [
-              { "name": "function.name", "contentType": "text/plain", "value": "Echo" },
-              { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
-              { "name": "function.entrypoint", "contentType": "text/plain", "value": "MyFunction.dll" }
-            ]
-          }
-        ]
-        """;
-        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 // Register a function from an existing DLL blob id
 app.MapPost("/api/functions/register-from/{dllId}", async (string dllId, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
@@ -538,26 +478,7 @@ app.MapGet("/api/blobs/{id}/info", async (string id, IBlobStorage storage, Cance
     .WithName("GetBlobInfo")
     .WithTags("Blobs")
     .WithDescription("Get metadata for a blob.")
-    .WithOpenApi(op =>
-    {
-        var example = """
-        {
-          "id": "a1b2c3",
-          "fileName": "hello.txt",
-          "size": 11,
-          "createdUtc": "2025-09-13T21:20:00Z",
-          "contentType": "text/plain",
-          "metadata": [
-            { "name": "author", "contentType": "text/plain", "value": "alice" }
-          ]
-        }
-        """;
-        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapPost("/api/blobs", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
@@ -709,31 +630,7 @@ app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage 
     .WithName("RegisterFunction")
     .WithTags("Functions")
     .WithDescription("Register a .NET Core function by uploading its entrypoint DLL. Validates the DLL contains a public method matching the function name.")
-    .WithOpenApi(op =>
-    {
-        // 201 Created example payload
-        var example = """
-        {
-          "id": "a1b2c3d4e5f6",
-          "fileName": "MyFunction.dll",
-          "size": 12345,
-          "createdUtc": "2025-09-13T21:20:00Z",
-          "contentType": "application/octet-stream",
-          "metadata": [
-            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
-            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
-            { "name": "function.entrypoint", "contentType": "text/plain", "value": "MyFunction.dll" },
-            { "name": "function.declaringType", "contentType": "text/plain", "value": "SampleFunctions" },
-            { "name": "function.verified", "contentType": "text/plain", "value": "true" }
-          ]
-        }
-        """;
-        if (op.Responses.TryGetValue("201", out var resp) && resp.Content.TryGetValue("application/json", out var media))
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
@@ -778,28 +675,7 @@ app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest reques
     .WithName("ScheduleFunction")
     .WithTags("Functions")
     .WithDescription("Sets the TimerTrigger NCRONTAB expression on a function blob.")
-    .WithOpenApi(op =>
-    {
-        var example = """
-        {
-          "id": "a1b2c3d4e5f6",
-          "fileName": "MyFunction.dll",
-          "size": 12345,
-          "createdUtc": "2025-09-13T21:20:00Z",
-          "contentType": "application/octet-stream",
-          "metadata": [
-            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
-            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
-            { "name": "TimerTrigger", "contentType": "text/plain", "value": "* * * * *" }
-          ]
-        }
-        """;
-        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
@@ -819,27 +695,7 @@ app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage sto
     .WithName("UnscheduleFunction")
     .WithTags("Functions")
     .WithDescription("Removes the TimerTrigger NCRONTAB expression from a function blob.")
-    .WithOpenApi(op =>
-    {
-        var example = """
-        {
-          "id": "a1b2c3d4e5f6",
-          "fileName": "MyFunction.dll",
-          "size": 12345,
-          "createdUtc": "2025-09-13T21:20:00Z",
-          "contentType": "application/octet-stream",
-          "metadata": [
-            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
-            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" }
-          ]
-        }
-        """;
-        if (op.Responses.TryGetValue("200", out var resp) && resp.Content.TryGetValue("application/json", out var media))
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
@@ -931,30 +787,7 @@ app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBl
     .WithName("RegisterFunctionScheduled")
     .WithTags("Functions")
     .WithDescription("Register a .NET Core function and schedule it with an NCRONTAB TimerTrigger in a single call.")
-    .WithOpenApi(op =>
-    {
-        var example = """
-        {
-          "id": "a1b2c3d4e5f6",
-          "fileName": "MyFunction.dll",
-          "size": 12345,
-          "createdUtc": "2025-09-13T21:20:00Z",
-          "contentType": "application/octet-stream",
-          "metadata": [
-            { "name": "function.name", "contentType": "text/plain", "value": "MyFunction" },
-            { "name": "function.runtime", "contentType": "text/plain", "value": ".net core" },
-            { "name": "function.entrypoint", "contentType": "text/plain", "value": "MyFunction.dll" },
-            { "name": "function.verified", "contentType": "text/plain", "value": "true" },
-            { "name": "TimerTrigger", "contentType": "text/plain", "value": "* * * * *" }
-          ]
-        }
-        """;
-        if (op.Responses.TryGetValue("201", out var resp) && resp.Content.TryGetValue("application/json", out var media))
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 // Cron preview endpoint
 app.MapGet("/api/functions/cron-next", (string expr, int? count) =>
@@ -1012,19 +845,7 @@ app.MapPost("/api/functions/{id}/queue-trigger", async (string id, HttpRequest r
     .WithName("SetQueueTrigger")
     .WithTags("Functions")
     .WithDescription("Sets the QueueTrigger queue name on a function blob.")
-    .WithOpenApi(op =>
-    {
-        const string example = """
-        {
-          "queue": "incoming"
-        }
-        """;
-        if (op.RequestBody?.Content.TryGetValue("application/json", out var media) == true)
-        {
-            media.Example = new OpenApiString(example);
-        }
-        return op;
-    });
+    .WithOpenApi();
 
 app.MapDelete("/api/functions/{id}/queue-trigger", async (string id, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
     {
