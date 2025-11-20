@@ -13,7 +13,7 @@
     }
     @if (!string.IsNullOrEmpty(_error))
     {
-        <span style="color:var(--neutral-foreground-rest)">Error: @_error</span>
+        <span style="color:var(--secondary-color)">Error: @_error</span>
     }
     <span>@(_blobs.Count) items</span>
     <FluentSearch OnSearch="OnSearch" Placeholder="Filter by file name or id" />
@@ -58,7 +58,7 @@
 
 @if (_toastVisible)
 {
-    <div style="position:fixed; right:16px; bottom:16px; z-index:1100; background:var(--accent-fill-rest); color:var(--foreground-on-accent-rest); padding:10px 14px; border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,.24);">
+    <div class="toast-notification">
         @_toastMessage
     </div>
 }

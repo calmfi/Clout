@@ -2,16 +2,18 @@
 
 <div class="navmenu">
     <input type="checkbox" title="Menu expand/collapse toggle" id="navmenu-toggle" class="navmenu-icon" />
-    <label for="navmenu-toggle" class="navmenu-icon"><FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill" /></label>
+    <label for="navmenu-toggle" class="navmenu-icon">
+        <FluentIcon Value="@(new Icons.Regular.Size20.Navigation())" Color="Color.Fill" />
+    </label>
     <nav class="sitenav" aria-labelledby="main-menu">
-        <FluentNavMenu Id="main-menu" Collapsible="true" Width="250" Title="Navigation menu" @bind-Expanded="expanded" CustomToggle="true">
-            <FluentNavLink Href="blobs" Icon="@(new Icons.Regular.Size20.Database())" IconColor="Color.Accent">Blobs</FluentNavLink>
-            <FluentNavLink Href="functions" Icon="@(new Icons.Regular.Size20.Flowchart())" IconColor="Color.Accent">Functions</FluentNavLink>
-            <FluentNavLink Href="queues" Icon="@(new Icons.Regular.Size20.Database())" IconColor="Color.Accent">Queues</FluentNavLink>
+        <FluentNavMenu Id="main-menu" Collapsible="false" Width="100%" Title="Navigation menu" CustomToggle="true">
+            <FluentNavLink Href="blobs" Icon="@(new Icons.Regular.Size20.Database())">Blobs</FluentNavLink>
+            <FluentNavLink Href="functions" Icon="@(new Icons.Regular.Size20.Flowchart())">Functions</FluentNavLink>
+            <FluentNavLink Href="queues" Icon="@(new Icons.Regular.Size20.Stack())">Queues</FluentNavLink>
         </FluentNavMenu>
     </nav>
 </div>
 
 @code {
-    private bool expanded = true;
+    // Collapsible logic handled by CSS/Layout for now
 }
