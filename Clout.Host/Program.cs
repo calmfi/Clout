@@ -1,11 +1,14 @@
 using System.Text.Json;
-using Clout.Host;
+using Clout.Host.Configuration;
 using Clout.Host.Functions;
+using Clout.Host.Health;
+using Clout.Host.Middleware;
 using Clout.Host.Queue;
 using Clout.Host.Storage;
 using Clout.Shared;
 using Clout.Shared.Abstractions;
 using Clout.Shared.Models;
+using Microsoft.Extensions.Options;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,10 +22,41 @@ builder.Services.AddOpenTelemetry();
 
 builder.Services.AddEndpointsApiExplorer();
 
+// Add health checks
+builder.Services.AddHealthChecks()
+    .AddCloutHealthChecks();
+
+// Configure and validate options
+builder.Services.AddOptions<BlobStorageOptions>()
+    .Bind(builder.Configuration.GetSection("BlobStorage"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddOptions<FunctionExecutionOptions>()
+    .Bind(builder.Configuration.GetSection("FunctionExecution"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddOptions<TempFileCleanupOptions>()
+    .Bind(builder.Configuration.GetSection("TempFileCleanup"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddOptions<DiagnosticsOptions>()
+    .Bind(builder.Configuration.GetSection("Diagnostics"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<IValidateOptions<BlobStorageOptions>, CloutConfigurationValidator>();
+builder.Services.AddSingleton<IValidateOptions<FunctionExecutionOptions>, CloutConfigurationValidator>();
+builder.Services.AddSingleton<IValidateOptions<TempFileCleanupOptions>, CloutConfigurationValidator>();
+builder.Services.AddSingleton<IValidateOptions<DiagnosticsOptions>, CloutConfigurationValidator>();
+
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");
 Directory.CreateDirectory(storageRoot);
 
-builder.Services.AddSingleton<IBlobStorage>(_ => new FileBlobStorage(storageRoot));
+builder.Services.AddSingleton<IBlobStorage>(sp => 
+    new FileBlobStorage(storageRoot, sp.GetRequiredService<ILogger<FileBlobStorage>>()));
 builder.Services.AddOptions<QueueStorageOptions>()
     .Bind(builder.Configuration.GetSection("Queue"))
     .ValidateOnStart();
@@ -31,6 +65,8 @@ builder.Services.AddSingleton<FunctionExecutor>();
 builder.Services.AddSingleton<QueueTriggerDispatcher>();
 builder.Services.AddSingleton<IQueueTriggerDispatcher>(sp => sp.GetRequiredService<QueueTriggerDispatcher>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<QueueTriggerDispatcher>());
+
+builder.Services.AddHostedService<TempFileCleanupService>();
 builder.Services.AddQuartz(o =>
 {
     o.UseJobFactory<Quartz.Simpl.MicrosoftDependencyInjectionJobFactory>();
@@ -41,6 +77,10 @@ builder.Services.AddQuartzHostedService(opt =>
 });
 
 var app = builder.Build();
+
+// Add middleware in correct order
+app.UseGlobalExceptionHandler();
+app.UseCorrelationId();
 
 app.MapDefaultEndpoints();
 

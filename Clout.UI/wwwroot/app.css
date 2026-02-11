@@ -13,14 +13,28 @@
     --surface-color: #ffffff;
     --text-primary: #1e293b;
     /* Slate 800 */
-    --text-secondary: #64748b;
-    /* Slate 500 */
+    --text-secondary: #475569;
+    /* Slate 600 - improved contrast */
     --border-color: #e2e8f0;
     /* Slate 200 */
 
+    /* Override Fluent UI accent tokens to use indigo instead of blue */
+    --accent-fill-rest: #6366f1;
+    --accent-fill-hover: #4f46e5;
+    --accent-fill-active: #4338ca;
+    --accent-fill-focus: #4f46e5;
+    --accent-foreground-rest: #4f46e5;
+    --accent-foreground-hover: #4338ca;
+    --accent-foreground-active: #3730a3;
+    --accent-stroke-control-rest: #6366f1;
+    --neutral-fill-rest: #f1f5f9;
+    --neutral-fill-hover: #e2e8f0;
+    --neutral-foreground-rest: #1e293b;
+    --neutral-foreground-hover: #0f172a;
+
     /* Glassmorphism */
-    --glass-bg: rgba(255, 255, 255, 0.7);
-    --glass-border: rgba(255, 255, 255, 0.5);
+    --glass-bg: rgba(255, 255, 255, 0.85);
+    --glass-border: rgba(255, 255, 255, 0.6);
     --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
     --glass-backdrop: blur(12px);
 
@@ -44,12 +58,27 @@
         /* Slate 800 */
         --text-primary: #f1f5f9;
         /* Slate 100 */
-        --text-secondary: #94a3b8;
-        /* Slate 400 */
+        --text-secondary: #cbd5e1;
+        /* Slate 300 - improved contrast on dark */
         --border-color: #334155;
         /* Slate 700 */
-        --glass-bg: rgba(30, 41, 59, 0.7);
-        --glass-border: rgba(255, 255, 255, 0.1);
+        --glass-bg: rgba(30, 41, 59, 0.85);
+        --glass-border: rgba(255, 255, 255, 0.15);
+
+        /* Fluent UI accent overrides for dark mode - improved contrast */
+        --accent-fill-rest: #818cf8;
+        --accent-fill-hover: #6366f1;
+        --accent-fill-active: #4f46e5;
+        --accent-fill-focus: #6366f1;
+        --accent-foreground-rest: #c7d2fe;
+        /* Lighter indigo for better contrast */
+        --accent-foreground-hover: #e0e7ff;
+        /* Even lighter on hover */
+        --accent-foreground-active: #818cf8;
+        --neutral-foreground-rest: #f1f5f9;
+        --neutral-foreground-hover: #ffffff;
+        --neutral-fill-rest: #1e293b;
+        --neutral-fill-hover: #334155;
     }
 }
 
@@ -88,14 +117,19 @@ fluent-nav-link {
 }
 
 fluent-nav-link:hover {
-    background-color: rgba(99, 102, 241, 0.1) !important;
-    color: var(--primary-color) !important;
+    background-color: rgba(99, 102, 241, 0.12) !important;
+    color: var(--primary-hover) !important;
 }
 
 fluent-nav-link[active] {
     background-color: var(--primary-color) !important;
     color: white !important;
     box-shadow: var(--shadow-md);
+}
+
+/* Remove background from nav item positioning region */
+.fluent-nav-item .positioning-region {
+    background-color: transparent !important;
 }
 
 /* Layout & Content */
@@ -198,7 +232,40 @@ fluent-data-grid-row {
 }
 
 fluent-data-grid-cell {
-    color: var(--text-secondary);
+    color: var(--text-primary);
+}
+
+/* Ensure links have sufficient contrast */
+a {
+    color: var(--accent-foreground-rest);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+a:hover {
+    color: var(--accent-foreground-hover);
+    text-decoration: underline;
+}
+
+/* Improve data grid link visibility */
+fluent-data-grid a {
+    color: var(--accent-foreground-rest);
+    font-weight: 600;
+}
+
+fluent-data-grid a:hover {
+    color: var(--accent-foreground-hover);
+}
+
+/* Improve stealth button visibility */
+fluent-button[appearance="stealth"] {
+    color: var(--accent-foreground-rest) !important;
+    font-weight: 500;
+}
+
+fluent-button[appearance="stealth"]:hover {
+    color: var(--accent-foreground-hover) !important;
+    background-color: rgba(99, 102, 241, 0.12) !important;
 }
 
 /* Mobile Responsiveness */

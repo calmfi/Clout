@@ -6,7 +6,8 @@
       "Bash(Select-String -Pattern \"error|Build succeeded|Build FAILED\")",
       "Bash(findstr:*)",
       "Bash(dotnet test:*)",
-      "Bash(dotnet package search:*)"
+      "Bash(dotnet package search:*)",
+      "Bash(git push:*)"
     ]
   }
 }

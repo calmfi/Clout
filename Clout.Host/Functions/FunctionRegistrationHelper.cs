@@ -1,3 +1,4 @@
+using Clout.Host.Resilience;
 using Clout.Shared;
 using Clout.Shared.Abstractions;
 using Clout.Shared.Models;
@@ -41,6 +42,27 @@ internal static class FunctionRegistrationHelper
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "Failed to delete temp file: {Path}", path);
+        }
+    }
+
+    /// <summary>
+    /// Safely deletes a temp file with retry policy, logging a warning on failure.
+    /// </summary>
+    public static void TryDeleteTempFileWithRetry(string path, ILogger? logger = null)
+    {
+        try
+        {
+            RetryPolicies.ExecuteWithRetryAsync(async () =>
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }, logger).ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Failed to delete temp file with retries: {Path}", path);
         }
     }
 

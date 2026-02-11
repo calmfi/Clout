@@ -1,10 +1,18 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
+using Clout.Host.Resilience;
+using Clout.Shared.Exceptions;
+using Clout.Shared.Validation;
 using Microsoft.Extensions.Options;
 
 namespace Clout.Host.Queue;
 
+/// <summary>
+/// Thread-safe, disk-backed AMQP-like queue server with quota management.
+/// All operations are async-safe and support cancellation.
+/// Includes retry policies for transient I/O failures.
+/// </summary>
 public class DiskBackedAmqpQueueServer : IAmqpQueueServer
 {
     private sealed class QueueState
@@ -37,6 +45,7 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
     private static readonly ObservableGauge<long> s_queueMessagesGauge = s_meter.CreateObservableGauge("queue.messages", ObserveQueueMessages, unit: "messages", description: "Current queued message count per queue");
     private static readonly ObservableGauge<long> s_queueBytesGauge = s_meter.CreateObservableGauge("queue.bytes", ObserveQueueBytes, unit: "bytes", description: "Current queued bytes per queue");
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
+    private const int SemaphoreTimeoutMs = 30000; // 30 second timeout to prevent indefinite hangs
 
     public DiskBackedAmqpQueueServer(IOptions<QueueStorageOptions> options, ILogger<DiskBackedAmqpQueueServer> logger)
     {
@@ -65,8 +74,12 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
         }
     }
 
+    /// <summary>
+    /// Creates a new queue with the specified name.
+    /// </summary>
     public void CreateQueue(string name)
     {
+        CloutValidation.ValidateQueueName(name);
         var state = GetOrCreate(name);
         Directory.CreateDirectory(state.DirectoryPath);
         if (!File.Exists(state.StateFilePath))
@@ -75,10 +88,14 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
         }
     }
 
+    /// <summary>
+    /// Purges all messages from a queue synchronously.
+    /// </summary>
     public void PurgeQueue(string name)
     {
+        CloutValidation.ValidateQueueName(name);
         var state = GetOrCreate(name);
-        state.Mutex.Wait();
+        state.Mutex.Wait(SemaphoreTimeoutMs);
         try
         {
             foreach (var file in state.MessageFiles)
@@ -89,6 +106,7 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
             state.MessageFiles.Clear();
             state.TotalBytes = 0;
             SaveState(state);
+            _logger?.LogInformation("Queue {Queue} purged successfully", name);
         }
         finally
         {
@@ -96,10 +114,67 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
         }
     }
 
+    /// <summary>
+    /// Purges all messages from a queue asynchronously with timeout protection.
+    /// </summary>
+    public async Task PurgeQueueAsync(string name, CancellationToken cancellationToken = default)
+    {
+        CloutValidation.ValidateQueueName(name);
+        var state = GetOrCreate(name);
+        
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(SemaphoreTimeoutMs);
+
+        try
+        {
+            await state.Mutex.WaitAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger?.LogError("Timeout acquiring mutex for queue {Queue} during purge", name);
+            throw new QueueOperationException(name, "Failed to acquire queue lock within timeout period.", "QUEUE_LOCK_TIMEOUT");
+        }
+
+        try
+        {
+            foreach (var file in state.MessageFiles)
+            {
+                var path = Path.Combine(state.DirectoryPath, file);
+                TryDelete(path);
+            }
+            state.MessageFiles.Clear();
+            state.TotalBytes = 0;
+            SaveState(state);
+            _logger?.LogInformation("Queue {Queue} purged successfully", name);
+        }
+        finally
+        {
+            state.Mutex.Release();
+        }
+    }
+
+    /// <summary>
+    /// Enqueues a message asynchronously with quota enforcement and timeout protection.
+    /// </summary>
     public async ValueTask EnqueueAsync<T>(string name, T message, CancellationToken cancellationToken = default)
     {
+        CloutValidation.ValidateQueueName(name);
+        
         var state = GetOrCreate(name);
-        await state.Mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(SemaphoreTimeoutMs);
+
+        try
+        {
+            await state.Mutex.WaitAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger?.LogError("Timeout acquiring mutex for queue {Queue} during enqueue", name);
+            throw new QueueOperationException(name, "Failed to acquire queue lock within timeout period.", "QUEUE_LOCK_TIMEOUT");
+        }
+
         try
         {
             Directory.CreateDirectory(state.DirectoryPath);
@@ -109,7 +184,8 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
             if (_options.MaxMessageBytes is int maxMsg && bytes.Length > maxMsg)
             {
                 _rejectCounter.Add(1);
-                ThrowQuota($"Message exceeds MaxMessageBytes={maxMsg}");
+                _logger?.LogWarning("Message for queue {Queue} exceeds MaxMessageBytes={MaxBytes}", name, maxMsg);
+                throw new QueueQuotaExceededException(name, maxMsg);
             }
 
             // Queue-level quotas
@@ -125,7 +201,8 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
                     if (overflow == OverflowPolicy.Reject)
                     {
                         _rejectCounter.Add(1);
-                        ThrowQuota("Enqueue would exceed queue quota");
+                        _logger?.LogWarning("Enqueue rejected for queue {Queue} due to quota exceeded", name);
+                        throw new QueueQuotaExceededException(name, maxBytes);
                     }
                     else if (overflow == OverflowPolicy.DropOldest)
                     {
@@ -159,18 +236,40 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
             _enqueueCounter.Add(1);
             state.MessageAvailable.Release();
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new QueueOperationException(name, "Enqueue operation timed out.", "QUEUE_OPERATION_TIMEOUT");
+        }
         finally
         {
             state.Mutex.Release();
         }
     }
 
+    /// <summary>
+    /// Dequeues a message asynchronously with timeout protection and cancellation support.
+    /// Returns default(T) if cancellation is requested.
+    /// </summary>
     public async ValueTask<T?> DequeueAsync<T>(string name, CancellationToken cancellationToken = default)
     {
+        CloutValidation.ValidateQueueName(name);
         var state = GetOrCreate(name);
+        
         while (!cancellationToken.IsCancellationRequested)
         {
-            await state.Mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(SemaphoreTimeoutMs);
+
+            try
+            {
+                await state.Mutex.WaitAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger?.LogError("Timeout acquiring mutex for queue {Queue} during dequeue", name);
+                throw new QueueOperationException(name, "Failed to acquire queue lock within timeout period.", "QUEUE_LOCK_TIMEOUT");
+            }
+
             try
             {
                 if (state.MessageFiles.Count > 0)
@@ -241,32 +340,36 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
     {
         try
         {
-            if (File.Exists(state.StateFilePath))
+            RetryPolicies.ExecuteWithJsonRetryAsync(async () =>
             {
-                var json = File.ReadAllText(state.StateFilePath);
-                var data = JsonSerializer.Deserialize<QueueStatePersisted>(json) ?? new();
-                state.MessageFiles.Clear();
-                state.MessageFiles.AddRange(data.Files ?? []);
-                state.TotalBytes = 0;
-                foreach (var f in state.MessageFiles)
+                if (File.Exists(state.StateFilePath))
                 {
-                    var p = Path.Combine(state.DirectoryPath, f);
-                    if (File.Exists(p)) state.TotalBytes += new FileInfo(p).Length;
-                }
-                if (_options.CleanupOrphansOnLoad)
-                {
-                    var known = new HashSet<string>(state.MessageFiles, StringComparer.OrdinalIgnoreCase);
-                    foreach (var p in Directory.EnumerateFiles(state.DirectoryPath, "*.bin"))
+                    var json = await File.ReadAllTextAsync(state.StateFilePath);
+                    var data = JsonSerializer.Deserialize<QueueStatePersisted>(json) ?? new();
+                    state.MessageFiles.Clear();
+                    state.MessageFiles.AddRange(data.Files ?? []);
+                    state.TotalBytes = 0;
+                    foreach (var f in state.MessageFiles)
                     {
-                        var fn = Path.GetFileName(p);
-                        if (!known.Contains(fn)) TryDelete(p);
+                        var p = Path.Combine(state.DirectoryPath, f);
+                        if (File.Exists(p)) state.TotalBytes += new FileInfo(p).Length;
+                    }
+                    if (_options.CleanupOrphansOnLoad)
+                    {
+                        var known = new HashSet<string>(state.MessageFiles, StringComparer.OrdinalIgnoreCase);
+                        foreach (var p in Directory.EnumerateFiles(state.DirectoryPath, "*.bin"))
+                        {
+                            var fn = Path.GetFileName(p);
+                            if (!known.Contains(fn)) TryDelete(p);
+                        }
                     }
                 }
-            }
-            else
-            {
-                SaveState(state);
-            }
+                else
+                {
+                    SaveState(state);
+                }
+                return true;
+            }, _logger).ConfigureAwait(false).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -278,9 +381,13 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
     {
         try
         {
-            var data = new QueueStatePersisted { Files = state.MessageFiles.ToArray() };
-            var json = JsonSerializer.Serialize(data, JsonOpts);
-            File.WriteAllText(state.StateFilePath, json);
+            RetryPolicies.ExecuteWithJsonRetryAsync(async () =>
+            {
+                var data = new QueueStatePersisted { Files = state.MessageFiles.ToArray() };
+                var json = JsonSerializer.Serialize(data, JsonOpts);
+                await File.WriteAllTextAsync(state.StateFilePath, json);
+                return true;
+            }, _logger).ConfigureAwait(false).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Clout.Host.Resilience;
 using Clout.Shared.Abstractions;
 using Clout.Shared.Models;
 
@@ -10,6 +11,7 @@ namespace Clout.Host.Storage;
 public sealed class FileBlobStorage : IBlobStorage
 {
     private readonly string _root;
+    private readonly ILogger<FileBlobStorage>? _logger;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -19,9 +21,11 @@ public sealed class FileBlobStorage : IBlobStorage
     /// Creates a new <see cref="FileBlobStorage"/> rooted at the specified directory.
     /// </summary>
     /// <param name="root">Root directory for blob files and metadata.</param>
-    public FileBlobStorage(string root)
+    /// <param name="logger">Optional logger for diagnostic information.</param>
+    public FileBlobStorage(string root, ILogger<FileBlobStorage>? logger = null)
     {
         _root = root;
+        _logger = logger;
         Directory.CreateDirectory(_root);
     }
 
@@ -35,10 +39,15 @@ public sealed class FileBlobStorage : IBlobStorage
         {
             Directory.CreateDirectory(_root);
         }
-        await using (var fs = File.Create(bin))
+
+        await RetryPolicies.ExecuteWithFileIoRetryAsync(async () =>
         {
-            await content.CopyToAsync(fs, cancellationToken);
-        }
+            await using (var fs = File.Create(bin))
+            {
+                await content.CopyToAsync(fs, cancellationToken);
+            }
+            return true;
+        }, _logger);
 
         var info = await BuildInfoAsync(id, originalName, contentType);
         await WriteMetaAsync(meta, info, cancellationToken);
@@ -55,10 +64,15 @@ public sealed class FileBlobStorage : IBlobStorage
         {
             Directory.CreateDirectory(_root);
         }
-        await using (var fs = File.Create(bin))
+
+        await RetryPolicies.ExecuteWithFileIoRetryAsync(async () =>
         {
-            await content.CopyToAsync(fs, cancellationToken);
-        }
+            await using (var fs = File.Create(bin))
+            {
+                await content.CopyToAsync(fs, cancellationToken);
+            }
+            return true;
+        }, _logger);
 
         var existing = await ReadMetaAsync(meta, cancellationToken);
         var info = existing is null
@@ -154,8 +168,12 @@ public sealed class FileBlobStorage : IBlobStorage
     private async Task<BlobInfo?> ReadMetaAsync(string metaPath, CancellationToken cancellationToken)
     {
         if (!File.Exists(metaPath)) return null;
-        await using var fs = File.OpenRead(metaPath);
-        return await System.Text.Json.JsonSerializer.DeserializeAsync<BlobInfo>(fs, _jsonOptions, cancellationToken);
+
+        return await RetryPolicies.ExecuteWithJsonRetryAsync(async () =>
+        {
+            await using var fs = File.OpenRead(metaPath);
+            return await System.Text.Json.JsonSerializer.DeserializeAsync<BlobInfo>(fs, _jsonOptions, cancellationToken);
+        }, _logger);
     }
 
     private async Task WriteMetaAsync(string metaPath, BlobInfo info, CancellationToken cancellationToken)
@@ -165,8 +183,13 @@ public sealed class FileBlobStorage : IBlobStorage
         {
             Directory.CreateDirectory(dir);
         }
-        await using var fs = File.Create(metaPath);
-        await System.Text.Json.JsonSerializer.SerializeAsync(fs, info, _jsonOptions, cancellationToken);
+
+        await RetryPolicies.ExecuteWithJsonRetryAsync(async () =>
+        {
+            await using var fs = File.Create(metaPath);
+            await System.Text.Json.JsonSerializer.SerializeAsync(fs, info, _jsonOptions, cancellationToken);
+            return true;
+        }, _logger);
     }
 }
 
