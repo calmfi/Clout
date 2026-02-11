@@ -271,7 +271,7 @@ try
                             var items = await client.ListFunctionsAsync(ct).ConfigureAwait(false);
                             foreach (var f in items)
                             {
-                                var name = f.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value ?? "<unknown>";
+                                var name = f.Metadata?.FirstOrDefault(m => string.Equals(m.Name, Clout.Shared.MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value ?? "<unknown>";
                                 Console.WriteLine($"{f.Id}\t{name}\t{f.FileName}");
                             }
                             return 0;

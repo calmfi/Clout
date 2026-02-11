@@ -38,7 +38,7 @@ public sealed class FunctionExecutor
             }
             finally
             {
-                try { if (File.Exists(temp)) File.Delete(temp); } catch { /* ignore */ }
+                FunctionRegistrationHelper.TryDeleteTempFile(temp, _logger);
             }
         }
         catch (OperationCanceledException)
@@ -55,4 +55,3 @@ public sealed class FunctionExecutor
         }
     }
 }
-

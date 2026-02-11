@@ -63,7 +63,7 @@ public partial class Functions
 
     private static bool IsFunction(BlobInfo b)
     {
-        return b.Metadata?.Any(m => m.Name == "function.name" || m.Name == "function.runtime") == true;
+        return b.Metadata?.Any(m => m.Name == MetadataKeys.FunctionName || m.Name == MetadataKeys.FunctionRuntime) == true;
     }
 
     private static FunctionRow ToRow(BlobInfo b) => new()
@@ -71,14 +71,14 @@ public partial class Functions
         Id = b.Id,
         CreatedUtc = b.CreatedUtc,
         CreatedDisplay = b.CreatedUtc.ToString("u"),
-        Name = Meta(b, "function.name"),
-        Runtime = Meta(b, "function.runtime"),
-        Entrypoint = Meta(b, "function.entrypoint"),
-        DeclaringType = Meta(b, "function.declaringType"),
-        Verified = Meta(b, "function.verified"),
-        TimerTrigger = Meta(b, "TimerTrigger"),
-        QueueTrigger = Meta(b, "QueueTrigger"),
-        SourceId = Meta(b, "function.sourceId")
+        Name = Meta(b, MetadataKeys.FunctionName),
+        Runtime = Meta(b, MetadataKeys.FunctionRuntime),
+        Entrypoint = Meta(b, MetadataKeys.FunctionEntrypoint),
+        DeclaringType = Meta(b, MetadataKeys.FunctionDeclaringType),
+        Verified = Meta(b, MetadataKeys.FunctionVerified),
+        TimerTrigger = Meta(b, MetadataKeys.TimerTrigger),
+        QueueTrigger = Meta(b, MetadataKeys.QueueTrigger),
+        SourceId = Meta(b, MetadataKeys.FunctionSourceId)
     };
 
     private static string Meta(BlobInfo b, string key) =>

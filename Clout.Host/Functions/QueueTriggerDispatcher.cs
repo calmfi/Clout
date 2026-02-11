@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Clout.Host.Queue;
+using Clout.Shared;
 using Clout.Shared.Abstractions;
 using Clout.Shared.Models;
 
@@ -108,9 +109,9 @@ public sealed class QueueTriggerDispatcher : BackgroundService, IQueueTriggerDis
         foreach (var blob in blobs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var queue = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "QueueTrigger", StringComparison.OrdinalIgnoreCase))?.Value;
+            var queue = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.QueueTrigger, StringComparison.OrdinalIgnoreCase))?.Value;
             if (string.IsNullOrWhiteSpace(queue)) continue;
-            var functionName = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+            var functionName = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value;
             if (string.IsNullOrWhiteSpace(functionName)) continue;
 
             try

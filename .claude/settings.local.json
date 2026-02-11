@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build Clout.sln)",
+      "Bash(dotnet build:*)",
+      "Bash(Select-String -Pattern \"error|Build succeeded|Build FAILED\")",
+      "Bash(findstr:*)",
+      "Bash(dotnet test:*)",
+      "Bash(dotnet package search:*)"
+    ]
+  }
+}

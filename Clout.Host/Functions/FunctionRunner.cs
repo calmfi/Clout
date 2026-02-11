@@ -5,6 +5,8 @@ namespace Clout.Host.Functions;
 
 internal static class FunctionRunner
 {
+    private static readonly TimeSpan ExecutionTimeout = TimeSpan.FromMinutes(5);
+
     public static async Task RunAsync(string assemblyPath, string methodName, JsonDocument? payload, CancellationToken cancellationToken)
     {
         // Load in isolated context to avoid locking and enable unloading
@@ -85,11 +87,12 @@ internal static class FunctionRunner
                 }
 
                 var result = selected.Invoke(instance, arguments);
-                // If the function returns a Task, await it.
+                // If the function returns a Task, await it with a timeout.
                 if (result is Task task)
                 {
-                    using var reg = cancellationToken.Register(() => { /* cooperative cancel not possible post-invoke */ });
-                    await task.ConfigureAwait(false);
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cts.CancelAfter(ExecutionTimeout);
+                    await task.WaitAsync(cts.Token).ConfigureAwait(false);
                 }
                 return;
             }
@@ -107,6 +110,4 @@ internal static class FunctionRunner
             catch { /* ignore */ }
         }
     }
-
 }
-

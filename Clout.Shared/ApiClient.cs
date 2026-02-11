@@ -351,7 +351,7 @@ public sealed class ApiClient : IDisposable
     public async Task<BlobInfo> RegisterFunctionWithScheduleAsync(string dllPath, string name, string cron, string runtime = "dotnet", CancellationToken cancellationToken = default)
     {
         // Validate cron locally against Quartz format (5 or 6 fields)
-        if (!TryParseSchedule(cron, out _))
+        if (!CronHelper.TryParseSchedule(cron, out _))
             throw new ArgumentException("Invalid cron expression (Quartz format expected).", nameof(cron));
 
         var info = await RegisterFunctionAsync(dllPath, name, runtime, cancellationToken).ConfigureAwait(false);
@@ -366,7 +366,7 @@ public sealed class ApiClient : IDisposable
     public async Task<BlobInfo> SetTimerTriggerAsync(string id, string cron, CancellationToken cancellationToken = default)
     {
         // Validate locally (Quartz cron, support 5- or 6-field)
-        if (!TryParseSchedule(cron, out _))
+        if (!CronHelper.TryParseSchedule(cron, out _))
             throw new ArgumentException("Invalid cron expression (Quartz format expected).", nameof(cron));
 
         var payload = new Dictionary<string, string> { ["expression"] = cron };
@@ -376,35 +376,11 @@ public sealed class ApiClient : IDisposable
         return result!;
     }
 
-    private static bool TryParseSchedule(string expr, out CronExpression? schedule)
-    {
-        var normalized = NormalizeCron(expr);
-        if (CronExpression.IsValidExpression(normalized))
-        {
-            schedule = new CronExpression(normalized);
-            return true;
-        }
-        schedule = null;
-        return false;
-    }
-
-    private static readonly char[] SplitWhitespace = new[] { ' ', '\t' };
-
-    private static string NormalizeCron(string expr)
-    {
-        var parts = expr.Split(SplitWhitespace, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 5)
-        {
-            return $"0 {expr}"; // add seconds for Quartz
-        }
-        return expr;
-    }
-
     /// <summary>
     /// Validates whether the provided cron expression is syntactically valid (Quartz)
     /// (with or without seconds). Returns false on invalid expressions.
     /// </summary>
-    public static bool IsValidCron(string expr) => TryParseSchedule(expr, out _);
+    public static bool IsValidCron(string expr) => CronHelper.IsValid(expr);
 
     /// <summary>
     /// Removes the TimerTrigger metadata entry from the blob, if present.

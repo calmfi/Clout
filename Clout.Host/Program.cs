@@ -3,10 +3,9 @@ using Clout.Host;
 using Clout.Host.Functions;
 using Clout.Host.Queue;
 using Clout.Host.Storage;
+using Clout.Shared;
 using Clout.Shared.Abstractions;
 using Clout.Shared.Models;
-// using Microsoft.OpenApi.Any;
-// using Microsoft.OpenApi.Models;
 using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,7 +18,6 @@ builder.Services.AddOpenApi();
 builder.Services.AddOpenTelemetry();
 
 builder.Services.AddEndpointsApiExplorer();
-// builder.Services.AddSwaggerGen(...); // Removed Swashbuckle
 
 var storageRoot = Path.Combine(AppContext.BaseDirectory, "storage");
 Directory.CreateDirectory(storageRoot);
@@ -46,57 +44,20 @@ var app = builder.Build();
 
 app.MapDefaultEndpoints();
 
-// app.UseSwagger(); // Removed Swashbuckle
-// app.UseSwaggerUI(); // Removed Swashbuckle
 app.MapOpenApi(); // Built-in OpenApi endpoint
 
 app.UseWebSockets();
 
 var logger = app.Logger;
+var maxBlobBytes = app.Configuration.GetValue<long?>("MaxBlobBytes") ?? 100 * 1024 * 1024; // 100MB default
 
 // Ensure the queue service is created at startup
 _ = app.Services.GetRequiredService<IAmqpQueueServer>();
 
-static string ToQuartzCron(string expr)
-{
-    var parts = expr.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-    if (parts.Length == 5)
-    {
-        // Convert 5-field NCRONTAB to Quartz: seconds + '?' for day-of-week
-        return $"0 {parts[0]} {parts[1]} {parts[2]} {parts[3]} ?";
-    }
-    return expr; // assume already includes seconds
-}
-
-static async Task ScheduleFunctionAsync(IScheduler scheduler, string blobId, string functionName, string cron)
-{
-    var jobKey = new JobKey($"function-{blobId}");
-    var job = JobBuilder.Create<Clout.Host.Functions.FunctionInvocationJob>()
-        .WithIdentity(jobKey)
-        .UsingJobData("blobId", blobId)
-        .UsingJobData("functionName", functionName)
-        .Build();
-
-    var trigger = TriggerBuilder.Create()
-        .WithIdentity($"trigger-{blobId}")
-        .ForJob(jobKey)
-        .WithCronSchedule(ToQuartzCron(cron))
-        .Build();
-
-    // Replace existing schedule if present
-    await scheduler.ScheduleJob(job, new HashSet<ITrigger> { trigger }, replace: true).ConfigureAwait(false);
-}
-
-static async Task UnscheduleFunctionAsync(IScheduler scheduler, string blobId)
-{
-    var jobKey = new JobKey($"function-{blobId}");
-    await scheduler.DeleteJob(jobKey).ConfigureAwait(false);
-}
-
 static async Task SyncQueueTriggerAsync(BlobInfo blob, IQueueTriggerDispatcher dispatcher, CancellationToken cancellationToken)
 {
-    var queue = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "QueueTrigger", StringComparison.OrdinalIgnoreCase))?.Value;
-    var functionName = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+    var queue = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.QueueTrigger, StringComparison.OrdinalIgnoreCase))?.Value;
+    var functionName = blob.Metadata?.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value;
 
     if (string.IsNullOrWhiteSpace(queue) || string.IsNullOrWhiteSpace(functionName))
     {
@@ -106,6 +67,7 @@ static async Task SyncQueueTriggerAsync(BlobInfo blob, IQueueTriggerDispatcher d
 
     await dispatcher.ActivateAsync(blob.Id, functionName.Trim(), queue.Trim(), cancellationToken).ConfigureAwait(false);
 }
+
 // Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/blobs", async (IBlobStorage storage, CancellationToken ct) =>
     {
@@ -204,11 +166,10 @@ amqp.MapPost("/queues/{name}/dequeue", async (string name, int? timeoutMs, IAmqp
     .WithOpenApi();
 
 // List registered functions (blobs with function metadata)
-// Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/functions", async (IBlobStorage storage, CancellationToken ct) =>
     {
         var all = await storage.ListAsync(ct);
-        var functions = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase)) == true).ToList();
+        var functions = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase)) == true).ToList();
         var json = JsonSerializer.Serialize(functions, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         return Results.Content(json, "application/json");
     })
@@ -218,50 +179,36 @@ app.MapGet("/api/functions", async (IBlobStorage storage, CancellationToken ct) 
     .WithOpenApi();
 
 // Register a function from an existing DLL blob id
-app.MapPost("/api/functions/register-from/{dllId}", async (string dllId, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+app.MapPost("/api/functions/register-from/{dllId}", async (string dllId, HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
         {
-        var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct).ConfigureAwait(false) ?? new();
+            var payload = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct).ConfigureAwait(false) ?? new();
             payload.TryGetValue("name", out var name);
-            payload.TryGetValue("runtime", out var runtime);
             if (string.IsNullOrWhiteSpace(name)) return Results.Text("Missing 'name'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            runtime = string.IsNullOrWhiteSpace(runtime) ? "dotnet" : runtime;
 
-        await using var source = await storage.OpenReadAsync(dllId, ct).ConfigureAwait(false);
+            await using var source = await storage.OpenReadAsync(dllId, ct).ConfigureAwait(false);
             if (source is null) return Results.NotFound();
             var info = await storage.GetInfoAsync(dllId, ct);
             var fileName = info?.FileName ?? $"{dllId}.dll";
             var contentType = info?.ContentType ?? "application/octet-stream";
 
-            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
-            await using (var outStream = File.Create(tempPath))
-            {
-                await source.CopyToAsync(outStream, ct).ConfigureAwait(false);
-            }
+            var tempPath = await FunctionRegistrationHelper.CopyToTempFileAsync(source, ct).ConfigureAwait(false);
             try
             {
-                if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
-                    return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+                var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
+                var (result, error) = await FunctionRegistrationHelper.RegisterSingleAsync(
+                    tempPath, name, fileName, contentType, storage, scheduler, logger, ct: ct).ConfigureAwait(false);
 
-                await using var dllStream = File.OpenRead(tempPath);
-                var saved = await storage.SaveAsync(fileName, dllStream, contentType, ct).ConfigureAwait(false);
-                var metadata = new List<BlobMetadata>
-                {
-                    new("function.name", "text/plain", name),
-                    new("function.runtime", "text/plain", ".net core"),
-                    new("function.entrypoint", "text/plain", fileName),
-                    new("function.declaringType", "text/plain", declaringType ?? string.Empty),
-                    new("function.verified", "text/plain", "true")
-                };
-                var updated = await storage.SetMetadataAsync(saved.Id, metadata, ct).ConfigureAwait(false);
-                var result = updated ?? saved;
-                var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                if (result is null)
+                    return Results.Text(error!, "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+                var json = JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
             }
             finally
             {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                FunctionRegistrationHelper.TryDeleteTempFile(tempPath, logger);
             }
         }
         catch (Exception ex)
@@ -282,7 +229,9 @@ app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, Ht
             var payload = await request.ReadFromJsonAsync<RegisterManyRequest>(cancellationToken: ct);
             if (payload is null || payload.Names is null || payload.Names.Length == 0)
                 return Results.Text("Missing 'names'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            var runtime = string.IsNullOrWhiteSpace(payload.Runtime) ? "dotnet" : payload.Runtime;
+
+            if (!string.IsNullOrWhiteSpace(payload.Cron) && !CronHelper.TryParseSchedule(payload.Cron, out _))
+                return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
 
             await using var source = await storage.OpenReadAsync(dllId, ct);
             if (source is null) return Results.NotFound();
@@ -290,50 +239,27 @@ app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, Ht
             var fileName = info?.FileName ?? $"{dllId}.dll";
             var contentType = info?.ContentType ?? "application/octet-stream";
 
-            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
-            await using (var outStream = File.Create(tempPath))
-            {
-                await source.CopyToAsync(outStream, ct);
-            }
+            var tempPath = await FunctionRegistrationHelper.CopyToTempFileAsync(source, ct).ConfigureAwait(false);
             try
             {
                 var results = new List<BlobInfo>();
-                var scheduler = await schedFactory.GetScheduler();
+                var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
                 foreach (var name in payload.Names.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
-                        return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+                    var (result, error) = await FunctionRegistrationHelper.RegisterSingleAsync(
+                        tempPath, name, fileName, contentType, storage, scheduler, logger,
+                        sourceId: dllId, cron: payload.Cron, saveContent: false, ct: ct).ConfigureAwait(false);
 
-                    // Dedup: create a lightweight function entry without copying dll content
-                    await using var empty = new MemoryStream(Array.Empty<byte>());
-                    var saved = await storage.SaveAsync(fileName, empty, contentType, ct);
-                    var metadata = new List<BlobMetadata>
-                    {
-                        new("function.name", "text/plain", name),
-                        new("function.runtime", "text/plain", ".net core"),
-                        new("function.entrypoint", "text/plain", fileName),
-                        new("function.declaringType", "text/plain", declaringType ?? string.Empty),
-                        new("function.verified", "text/plain", "true"),
-                        new("function.sourceId", "text/plain", dllId)
-                    };
-                    if (!string.IsNullOrWhiteSpace(payload.Cron))
-                    {
-                        if (!ApiHelpers.TryParseSchedule(payload.Cron, out _))
-                            return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-                        metadata.Add(new BlobMetadata("TimerTrigger", "text/plain", payload.Cron));
-                        await ScheduleFunctionAsync(scheduler, saved.Id, name, payload.Cron);
-                        var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{saved.Id}"));
-                        var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
-                        if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, saved.Id, next);
-                    }
-                    var updated = await storage.SetMetadataAsync(saved.Id, metadata, ct);
-                    results.Add(updated ?? saved);
+                    if (result is null)
+                        return Results.Text(error!, "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+                    results.Add(result);
                     ct.ThrowIfCancellationRequested();
                 }
-                var json = System.Text.Json.JsonSerializer.Serialize(results, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                var json = JsonSerializer.Serialize(results, new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
             }
-            finally { try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { } }
+            finally { FunctionRegistrationHelper.TryDeleteTempFile(tempPath, logger); }
         }
         catch (Exception ex)
         {
@@ -345,7 +271,7 @@ app.MapPost("/api/functions/register-many-from/{dllId}", async (string dllId, Ht
     .WithDescription("Register multiple functions by referencing an existing DLL blob id and providing names.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
+// Register multiple functions from uploaded DLL
 app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
@@ -362,18 +288,10 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
             if (file is null) return Results.Text("Missing 'file' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
             if (string.IsNullOrWhiteSpace(namesRaw)) return Results.Text("Missing 'names' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
             if (string.IsNullOrWhiteSpace(runtime)) return Results.Text("Missing 'runtime' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-
-            var rt = runtime.Trim().ToLowerInvariant();
-            var allowed = new[] { "dotnet", ".net", ".net core", "dotnetcore", "netcore", "net" };
-            if (!allowed.Contains(rt))
-            {
+            if (!FunctionRegistrationHelper.IsValidRuntime(runtime))
                 return Results.Text("Unsupported runtime. Only '.NET Core' is allowed (e.g., 'dotnet' or 'dotnetcore').", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            }
-
             if (!file.FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-            {
                 return Results.Text("Entrypoint must be a single .dll file.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            }
 
             var names = namesRaw
                 .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -382,61 +300,38 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
             if (names.Length == 0)
                 return Results.Text("No function names provided in 'names'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
 
-            bool addCron = false;
+            string? cronValue = null;
             if (!string.IsNullOrWhiteSpace(cron))
             {
-                if (!ApiHelpers.TryParseSchedule(cron, out _))
+                if (!CronHelper.TryParseSchedule(cron, out _))
                     return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-                addCron = true;
+                cronValue = cron;
             }
 
-            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
-            await using (var outStream = File.Create(tempPath))
-            await using (var inStream = file.OpenReadStream())
-            {
-                await inStream.CopyToAsync(outStream, ct).ConfigureAwait(false);
-            }
-
+            var tempPath = await FunctionRegistrationHelper.CopyToTempFileAsync(file.OpenReadStream(), ct).ConfigureAwait(false);
             try
             {
                 var results = new List<BlobInfo>();
-                var scheduler = await schedFactory.GetScheduler();
+                var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
                 foreach (var name in names)
                 {
-                    if (!FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType))
-                    {
-                        return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-                    }
+                    var (result, error) = await FunctionRegistrationHelper.RegisterSingleAsync(
+                        tempPath, name, file.FileName, file.ContentType ?? "application/octet-stream",
+                        storage, scheduler, logger, cron: cronValue, ct: ct).ConfigureAwait(false);
 
-                    await using var dllStream = File.OpenRead(tempPath);
-                    var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct);
-                    var metadata = new List<BlobMetadata>
-                    {
-                        new("function.name", "text/plain", name),
-                        new("function.runtime", "text/plain", ".net core"),
-                        new("function.entrypoint", "text/plain", file.FileName),
-                        new("function.declaringType", "text/plain", declaringType ?? string.Empty),
-                        new("function.verified", "text/plain", "true")
-                    };
-                    if (addCron)
-                    {
-                        metadata.Add(new BlobMetadata("TimerTrigger", "text/plain", cron));
-                        await ScheduleFunctionAsync(scheduler, info.Id, name, cron);
-                        var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{info.Id}"));
-                        var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
-                        if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, info.Id, next);
-                    }
-                    var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
-                    results.Add(updated ?? info);
+                    if (result is null)
+                        return Results.Text(error!, "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
+
+                    results.Add(result);
                     ct.ThrowIfCancellationRequested();
                 }
 
-                var json = System.Text.Json.JsonSerializer.Serialize(results, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                var json = JsonSerializer.Serialize(results, new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
             }
             finally
             {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                FunctionRegistrationHelper.TryDeleteTempFile(tempPath, logger);
             }
         }
         catch (Exception ex)
@@ -449,11 +344,11 @@ app.MapPost("/api/functions/register-many", async (HttpRequest request, IBlobSto
     .WithDescription("Register multiple functions from one .dll by providing a comma- or newline-separated list of method names in 'names'.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
+// Download blob
 app.MapGet("/api/blobs/{id}", async (string id, IBlobStorage storage, CancellationToken ct) =>
     {
         var info = await storage.GetInfoAsync(id, ct);
-        var sourceId = info?.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase))?.Value;
+        var sourceId = info?.Metadata?.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionSourceId, StringComparison.OrdinalIgnoreCase))?.Value;
         var readId = string.IsNullOrWhiteSpace(sourceId) ? id : sourceId;
         var stream = await storage.OpenReadAsync(readId, ct);
         if (stream is null) return Results.NotFound();
@@ -467,7 +362,6 @@ app.MapGet("/api/blobs/{id}", async (string id, IBlobStorage storage, Cancellati
     .WithDescription("Download blob content by identifier.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapGet("/api/blobs/{id}/info", async (string id, IBlobStorage storage, CancellationToken ct) =>
     {
         var info = await storage.GetInfoAsync(id, ct);
@@ -480,7 +374,7 @@ app.MapGet("/api/blobs/{id}/info", async (string id, IBlobStorage storage, Cance
     .WithDescription("Get metadata for a blob.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
+// Upload blob with size validation
 app.MapPost("/api/blobs", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
     {
         if (!request.HasFormContentType)
@@ -489,6 +383,9 @@ app.MapPost("/api/blobs", async (HttpRequest request, IBlobStorage storage, Canc
         var form = await request.ReadFormAsync(ct);
         var file = form.Files["file"];
         if (file is null) return Results.BadRequest("Missing 'file' field.");
+
+        if (file.Length > maxBlobBytes)
+            return Results.Text($"File exceeds maximum allowed size of {maxBlobBytes} bytes.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status413PayloadTooLarge);
 
         var info = await storage.SaveAsync(file.FileName, file.OpenReadStream(), file.ContentType, ct);
         var json = JsonSerializer.Serialize(info, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -499,7 +396,7 @@ app.MapPost("/api/blobs", async (HttpRequest request, IBlobStorage storage, Canc
     .WithDescription("Upload a new blob via multipart/form-data.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
+// Replace blob with size validation
 app.MapPut("/api/blobs/{id}", async (string id, HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
     {
         if (!request.HasFormContentType)
@@ -508,6 +405,9 @@ app.MapPut("/api/blobs/{id}", async (string id, HttpRequest request, IBlobStorag
         var form = await request.ReadFormAsync(ct);
         var file = form.Files["file"];
         if (file is null) return Results.BadRequest("Missing 'file' field.");
+
+        if (file.Length > maxBlobBytes)
+            return Results.Text($"File exceeds maximum allowed size of {maxBlobBytes} bytes.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status413PayloadTooLarge);
 
         var info = await storage.ReplaceAsync(id, file.OpenReadStream(), file.ContentType, file.FileName, ct);
         if (info is null) return Results.NotFound();
@@ -519,7 +419,6 @@ app.MapPut("/api/blobs/{id}", async (string id, HttpRequest request, IBlobStorag
     .WithDescription("Replace the content (and filename) of an existing blob.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapPut("/api/blobs/{id}/metadata", async (string id, HttpRequest request, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
     {
         var meta = await request.ReadFromJsonAsync<List<BlobMetadata>>(cancellationToken: ct);
@@ -535,7 +434,6 @@ app.MapPut("/api/blobs/{id}/metadata", async (string id, HttpRequest request, IB
     .WithDescription("Replace metadata entries for the blob with the provided list.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
 app.MapDelete("/api/blobs/{id}", async (string id, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
     {
         var deleted = await storage.DeleteAsync(id, ct);
@@ -552,8 +450,8 @@ app.MapDelete("/api/blobs/{id}", async (string id, IBlobStorage storage, IQueueT
     .WithDescription("Delete a blob by identifier.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
-app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage storage, CancellationToken ct) =>
+// Register a single function from uploaded DLL
+app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
         {
@@ -568,58 +466,28 @@ app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage 
             if (file is null) return Results.Text("Missing 'file' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
             if (string.IsNullOrWhiteSpace(name)) return Results.Text("Missing 'name' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
             if (string.IsNullOrWhiteSpace(runtime)) return Results.Text("Missing 'runtime' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-
-            // Only .NET Core (aka .NET) is supported at the moment
-            var rt = runtime.Trim().ToLowerInvariant();
-            var allowed = new[] { "dotnet", ".net", ".net core", "dotnetcore", "netcore", "net" };
-            if (!allowed.Contains(rt))
-            {
+            if (!FunctionRegistrationHelper.IsValidRuntime(runtime))
                 return Results.Text("Unsupported runtime. Only '.NET Core' is allowed (e.g., 'dotnet' or 'dotnetcore').", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            }
-
             if (!file.FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-            {
                 return Results.Text("Entrypoint must be a single .dll file.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            }
 
-            // Persist upload to a temp file for validation and then store in blob storage
-            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
-            await using (var outStream = File.Create(tempPath))
-            await using (var inStream = file.OpenReadStream())
-            {
-                await inStream.CopyToAsync(outStream, ct);
-            }
-
+            var tempPath = await FunctionRegistrationHelper.CopyToTempFileAsync(file.OpenReadStream(), ct).ConfigureAwait(false);
             try
             {
-                var validation = FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType);
-                if (!validation)
-                {
-                    return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-                }
+                var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
+                var (result, error) = await FunctionRegistrationHelper.RegisterSingleAsync(
+                    tempPath, name, file.FileName, file.ContentType ?? "application/octet-stream",
+                    storage, scheduler, logger, ct: ct).ConfigureAwait(false);
 
-                // Save validated DLL to blob storage
-                await using var dllStream = File.OpenRead(tempPath);
-                var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct).ConfigureAwait(false);
+                if (result is null)
+                    return Results.Text(error!, "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
 
-                // Attach function metadata to the blob
-                var metadata = new List<BlobMetadata>
-                {
-                    new("function.name", "text/plain", name),
-                    new("function.runtime", "text/plain", ".net core"),
-                    new("function.entrypoint", "text/plain", file.FileName),
-                    new("function.declaringType", "text/plain", declaringType ?? string.Empty),
-                    new("function.verified", "text/plain", "true")
-                };
-
-                var updated = await storage.SetMetadataAsync(info.Id, metadata, ct).ConfigureAwait(false);
-                var result = updated ?? info;
-                var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                var json = JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
             }
             finally
             {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+                FunctionRegistrationHelper.TryDeleteTempFile(tempPath, logger);
             }
         }
         catch (Exception ex)
@@ -632,39 +500,34 @@ app.MapPost("/api/functions/register", async (HttpRequest request, IBlobStorage 
     .WithDescription("Register a .NET Core function by uploading its entrypoint DLL. Validates the DLL contains a public method matching the function name.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
+// Schedule a function
 app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
         {
-            // Accept JSON: { "expression": "* * * * *" } or { "ncrontab": "..." }
             var body = await request.ReadFromJsonAsync<Dictionary<string, string>>(cancellationToken: ct);
             var expr = body is not null && (body.TryGetValue("expression", out var e) || body.TryGetValue("ncrontab", out e)) ? e : null;
             if (string.IsNullOrWhiteSpace(expr))
                 return Results.Text("Missing JSON body with 'expression' (or 'ncrontab') property.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
 
-            // Validate cron (support 5- and 6-field)
-            if (!ApiHelpers.TryParseSchedule(expr!, out _))
+            if (!CronHelper.TryParseSchedule(expr!, out _))
                 return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
 
             var info = await storage.GetInfoAsync(id, ct);
             if (info is null) return Results.NotFound();
             var list = info.Metadata.ToList();
-            list.RemoveAll(m => string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase));
-            list.Add(new BlobMetadata("TimerTrigger", "text/plain", expr!));
+            list.RemoveAll(m => string.Equals(m.Name, MetadataKeys.TimerTrigger, StringComparison.OrdinalIgnoreCase));
+            list.Add(new BlobMetadata(MetadataKeys.TimerTrigger, "text/plain", expr!));
             var updated = await storage.SetMetadataAsync(id, list, ct);
             if (updated is null) return Results.NotFound();
-            // Schedule with Quartz
-            var scheduler = await schedFactory.GetScheduler();
-            var funcName = updated.Metadata.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+
+            var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
+            var funcName = updated.Metadata.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value;
             if (!string.IsNullOrWhiteSpace(funcName))
             {
-                await ScheduleFunctionAsync(scheduler, id, funcName!, expr!);
-                var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{id}"));
-                var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
-                if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", funcName, id, next);
+                await FunctionRegistrationHelper.ScheduleFunctionAsync(scheduler, id, funcName!, expr!, logger).ConfigureAwait(false);
             }
-            var json = System.Text.Json.JsonSerializer.Serialize(updated, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            var json = JsonSerializer.Serialize(updated, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             return Results.Content(json, "application/json");
         }
         catch (Exception ex)
@@ -677,19 +540,19 @@ app.MapPost("/api/functions/{id}/schedule", async (string id, HttpRequest reques
     .WithDescription("Sets the TimerTrigger NCRONTAB expression on a function blob.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
+// Unschedule a function
 app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         var info = await storage.GetInfoAsync(id, ct);
         if (info is null) return Results.NotFound();
         var list = info.Metadata.ToList();
-        list.RemoveAll(m => string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase));
+        list.RemoveAll(m => string.Equals(m.Name, MetadataKeys.TimerTrigger, StringComparison.OrdinalIgnoreCase));
         var updated = await storage.SetMetadataAsync(id, list, ct);
         if (updated is null) return Results.NotFound();
-        var scheduler = await schedFactory.GetScheduler();
-        await UnscheduleFunctionAsync(scheduler, id);
+        var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
+        await FunctionRegistrationHelper.UnscheduleFunctionAsync(scheduler, id).ConfigureAwait(false);
         logger.LogInformation("Unscheduled function job for {Id}", id);
-        var json = System.Text.Json.JsonSerializer.Serialize(updated, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        var json = JsonSerializer.Serialize(updated, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         return Results.Content(json, "application/json");
     })
     .WithName("UnscheduleFunction")
@@ -697,7 +560,7 @@ app.MapDelete("/api/functions/{id}/schedule", async (string id, IBlobStorage sto
     .WithDescription("Removes the TimerTrigger NCRONTAB expression from a function blob.")
     .WithOpenApi();
 
-// Cancellation: see AGENTS.md > "Cancellation & Async"
+// Register and schedule a function in one call
 app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBlobStorage storage, ISchedulerFactory schedFactory, CancellationToken ct) =>
     {
         try
@@ -712,7 +575,6 @@ app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBl
             var cron = form["cron"].ToString();
             if (string.IsNullOrWhiteSpace(cron))
             {
-                // Try alternate keys for convenience
                 cron = form["expression"].ToString();
                 if (string.IsNullOrWhiteSpace(cron)) cron = form["ncrontab"].ToString();
             }
@@ -721,62 +583,30 @@ app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBl
             if (string.IsNullOrWhiteSpace(name)) return Results.Text("Missing 'name' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
             if (string.IsNullOrWhiteSpace(runtime)) return Results.Text("Missing 'runtime' field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
             if (string.IsNullOrWhiteSpace(cron)) return Results.Text("Missing 'cron' (or 'expression'/'ncrontab') field.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-
-            var rt = runtime.Trim().ToLowerInvariant();
-            var allowed = new[] { "dotnet", ".net", ".net core", "dotnetcore", "netcore", "net" };
-            if (!allowed.Contains(rt))
-            {
+            if (!FunctionRegistrationHelper.IsValidRuntime(runtime))
                 return Results.Text("Unsupported runtime. Only '.NET Core' is allowed (e.g., 'dotnet' or 'dotnetcore').", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            }
             if (!file.FileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-            {
                 return Results.Text("Entrypoint must be a single .dll file.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            }
-            if (!ApiHelpers.TryParseSchedule(cron, out _))
-            {
+            if (!CronHelper.TryParseSchedule(cron, out _))
                 return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-            }
 
-            var tempPath = Path.Combine(Path.GetTempPath(), $"clout_{Guid.NewGuid():N}.dll");
-            await using (var outStream = File.Create(tempPath))
-            await using (var inStream = file.OpenReadStream())
-            {
-                await inStream.CopyToAsync(outStream, ct);
-            }
-
+            var tempPath = await FunctionRegistrationHelper.CopyToTempFileAsync(file.OpenReadStream(), ct).ConfigureAwait(false);
             try
             {
-                var validation = FunctionAssemblyInspector.ContainsPublicMethod(tempPath, name, out var declaringType);
-                if (!validation)
-                {
-                    return Results.Text($"Validation failed: could not find a public method named '{name}' in the provided assembly.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-                }
+                var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
+                var (result, error) = await FunctionRegistrationHelper.RegisterSingleAsync(
+                    tempPath, name, file.FileName, file.ContentType ?? "application/octet-stream",
+                    storage, scheduler, logger, cron: cron, ct: ct).ConfigureAwait(false);
 
-                await using var dllStream = File.OpenRead(tempPath);
-                var info = await storage.SaveAsync(file.FileName, dllStream, file.ContentType ?? "application/octet-stream", ct).ConfigureAwait(false);
+                if (result is null)
+                    return Results.Text(error!, "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
 
-                var metadata = new List<BlobMetadata>
-                {
-                    new("function.name", "text/plain", name),
-                    new("function.runtime", "text/plain", ".net core"),
-                    new("function.entrypoint", "text/plain", file.FileName),
-                    new("function.declaringType", "text/plain", declaringType ?? string.Empty),
-                    new("function.verified", "text/plain", "true"),
-                    new("TimerTrigger", "text/plain", cron)
-                };
-                var updated = await storage.SetMetadataAsync(info.Id, metadata, ct);
-                var result = updated ?? info;
-                var scheduler = await schedFactory.GetScheduler().ConfigureAwait(false);
-                await ScheduleFunctionAsync(scheduler, result.Id, name, cron).ConfigureAwait(false);
-                var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{result.Id}")).ConfigureAwait(false);
-                var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
-                if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, result.Id, next);
-                var json = System.Text.Json.JsonSerializer.Serialize(result, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+                var json = JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 return Results.Content(json, "application/json", System.Text.Encoding.UTF8, StatusCodes.Status201Created);
             }
             finally
             {
-                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+                FunctionRegistrationHelper.TryDeleteTempFile(tempPath, logger);
             }
         }
         catch (Exception ex)
@@ -792,7 +622,7 @@ app.MapPost("/api/functions/register/scheduled", async (HttpRequest request, IBl
 // Cron preview endpoint
 app.MapGet("/api/functions/cron-next", (string expr, int? count) =>
     {
-        if (!ApiHelpers.TryParseSchedule(expr, out var schedule))
+        if (!CronHelper.TryParseSchedule(expr, out var schedule))
         {
             return Results.Text("Invalid cron expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
         }
@@ -812,6 +642,7 @@ app.MapGet("/api/functions/cron-next", (string expr, int? count) =>
     .WithTags("Functions")
     .WithDescription("Returns the next N occurrences for a valid NCRONTAB expression starting from now (UTC).")
     .WithOpenApi();
+
 // Queue trigger management
 app.MapPost("/api/functions/{id}/queue-trigger", async (string id, HttpRequest request, IBlobStorage storage, IQueueTriggerDispatcher dispatcher, CancellationToken ct) =>
     {
@@ -825,15 +656,15 @@ app.MapPost("/api/functions/{id}/queue-trigger", async (string id, HttpRequest r
         var info = await storage.GetInfoAsync(id, ct);
         if (info is null) return Results.NotFound();
 
-        var functionName = info.Metadata?.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
+        var functionName = info.Metadata?.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value;
         if (string.IsNullOrWhiteSpace(functionName))
         {
             return Results.Text("Queue triggers require 'function.name' metadata on the blob.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
         }
 
         var metadata = info.Metadata?.ToList() ?? new List<BlobMetadata>();
-        metadata.RemoveAll(m => string.Equals(m.Name, "QueueTrigger", StringComparison.OrdinalIgnoreCase));
-        metadata.Add(new BlobMetadata("QueueTrigger", "text/plain", queue));
+        metadata.RemoveAll(m => string.Equals(m.Name, MetadataKeys.QueueTrigger, StringComparison.OrdinalIgnoreCase));
+        metadata.Add(new BlobMetadata(MetadataKeys.QueueTrigger, "text/plain", queue));
 
         var updated = await storage.SetMetadataAsync(id, metadata, ct);
         if (updated is null) return Results.NotFound();
@@ -853,7 +684,7 @@ app.MapDelete("/api/functions/{id}/queue-trigger", async (string id, IBlobStorag
         if (info is null) return Results.NotFound();
 
         var metadata = info.Metadata?.ToList() ?? new List<BlobMetadata>();
-        metadata.RemoveAll(m => string.Equals(m.Name, "QueueTrigger", StringComparison.OrdinalIgnoreCase));
+        metadata.RemoveAll(m => string.Equals(m.Name, MetadataKeys.QueueTrigger, StringComparison.OrdinalIgnoreCase));
         var updated = await storage.SetMetadataAsync(id, metadata, ct);
         if (updated is null) return Results.NotFound();
 
@@ -874,29 +705,25 @@ app.MapPost("/api/functions/schedule-all", async (HttpRequest request, IBlobStor
             return Results.Text("Missing 'sourceId'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
         if (!payload.TryGetValue("cron", out var cron) || string.IsNullOrWhiteSpace(cron))
             return Results.Text("Missing 'cron'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
-        if (!ApiHelpers.TryParseSchedule(cron, out _))
+        if (!CronHelper.TryParseSchedule(cron, out _))
             return Results.Text("Invalid NCRONTAB expression.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
 
         var all = await storage.ListAsync(ct).ConfigureAwait(false);
-        var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
+        var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, MetadataKeys.FunctionSourceId, StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
         var count = 0;
-        var scheduler = await schedFactory.GetScheduler().ConfigureAwait(false);
+        var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
         foreach (var f in funcs)
         {
             var meta = f.Metadata != null ? f.Metadata.ToList() : new List<BlobMetadata>();
-            // remove existing TimerTrigger
-            meta = meta.Where(m => !string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase)).ToList();
-            meta.Add(new BlobMetadata("TimerTrigger", "text/plain", cron));
+            meta = meta.Where(m => !string.Equals(m.Name, MetadataKeys.TimerTrigger, StringComparison.OrdinalIgnoreCase)).ToList();
+            meta.Add(new BlobMetadata(MetadataKeys.TimerTrigger, "text/plain", cron));
             await storage.SetMetadataAsync(f.Id, meta, ct).ConfigureAwait(false);
-            var name = meta.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value
-                ?? f.Metadata.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value
+            var name = meta.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value
+                ?? f.Metadata?.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value
                 ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(name))
             {
-                await ScheduleFunctionAsync(scheduler, f.Id, name, cron).ConfigureAwait(false);
-                var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{f.Id}")).ConfigureAwait(false);
-                var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
-                if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, f.Id, next);
+                await FunctionRegistrationHelper.ScheduleFunctionAsync(scheduler, f.Id, name, cron, logger).ConfigureAwait(false);
             }
             count++;
             ct.ThrowIfCancellationRequested();
@@ -915,15 +742,15 @@ app.MapPost("/api/functions/unschedule-all", async (HttpRequest request, IBlobSt
         if (!payload.TryGetValue("sourceId", out var sourceId) || string.IsNullOrWhiteSpace(sourceId))
             return Results.Text("Missing 'sourceId'.", "text/plain", System.Text.Encoding.UTF8, StatusCodes.Status400BadRequest);
         var all = await storage.ListAsync(ct).ConfigureAwait(false);
-        var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, "function.sourceId", StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
+        var funcs = all.Where(b => b.Metadata?.Any(m => string.Equals(m.Name, MetadataKeys.FunctionSourceId, StringComparison.OrdinalIgnoreCase) && string.Equals(m.Value, sourceId, StringComparison.OrdinalIgnoreCase)) == true).ToList();
         var count = 0;
-        var scheduler = await schedFactory.GetScheduler().ConfigureAwait(false);
+        var scheduler = await schedFactory.GetScheduler(ct).ConfigureAwait(false);
         foreach (var f in funcs)
         {
             var meta = f.Metadata != null ? f.Metadata.ToList() : new List<BlobMetadata>();
-            meta = meta.Where(m => !string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase)).ToList();
+            meta = meta.Where(m => !string.Equals(m.Name, MetadataKeys.TimerTrigger, StringComparison.OrdinalIgnoreCase)).ToList();
             await storage.SetMetadataAsync(f.Id, meta, ct).ConfigureAwait(false);
-            await UnscheduleFunctionAsync(scheduler, f.Id).ConfigureAwait(false);
+            await FunctionRegistrationHelper.UnscheduleFunctionAsync(scheduler, f.Id).ConfigureAwait(false);
             count++;
             ct.ThrowIfCancellationRequested();
         }
@@ -946,23 +773,13 @@ if (!disableQuartz)
     var blobs = await storage.ListAsync().ConfigureAwait(false);
     foreach (var b in blobs)
     {
-        var name = b.Metadata.FirstOrDefault(m => string.Equals(m.Name, "function.name", StringComparison.OrdinalIgnoreCase))?.Value;
-        var cron = b.Metadata.FirstOrDefault(m => string.Equals(m.Name, "TimerTrigger", StringComparison.OrdinalIgnoreCase))?.Value;
+        var name = b.Metadata.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.FunctionName, StringComparison.OrdinalIgnoreCase))?.Value;
+        var cron = b.Metadata.FirstOrDefault(m => string.Equals(m.Name, MetadataKeys.TimerTrigger, StringComparison.OrdinalIgnoreCase))?.Value;
         if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(cron))
         {
-            await ScheduleFunctionAsync(scheduler, b.Id, name!, cron!).ConfigureAwait(false);
-            var triggers = await scheduler.GetTriggersOfJob(new JobKey($"function-{b.Id}")).ConfigureAwait(false);
-            var next = triggers.FirstOrDefault()?.GetNextFireTimeUtc();
-            if (next.HasValue) logger.LogInformation("Scheduled function {Function} ({Id}) next at {Next}", name, b.Id, next);
+            await FunctionRegistrationHelper.ScheduleFunctionAsync(scheduler, b.Id, name!, cron!, logger).ConfigureAwait(false);
         }
     }
 }
 
 await app.RunAsync(default);
-
-
-
-
-
-
-
