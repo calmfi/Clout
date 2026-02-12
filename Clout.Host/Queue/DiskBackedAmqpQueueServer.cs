@@ -264,7 +264,7 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
             {
                 await state.Mutex.WaitAsync(cts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 _logger?.LogError("Timeout acquiring mutex for queue {Queue} during dequeue", name);
                 throw new QueueOperationException(name, "Failed to acquire queue lock within timeout period.", "QUEUE_LOCK_TIMEOUT");
@@ -293,12 +293,23 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
                     return obj;
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return default;
+            }
             finally
             {
                 state.Mutex.Release();
             }
 
-            await state.MessageAvailable.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await state.MessageAvailable.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return default;
+            }
         }
 
         return default;
@@ -313,6 +324,39 @@ public class DiskBackedAmqpQueueServer : IAmqpQueueServer
             list.Add(new QueueStats(s.Name, s.MessageFiles.Count, s.TotalBytes));
         }
         return list;
+    }
+
+    /// <summary>
+    /// Flushes all queues to ensure all pending I/O operations are persisted to disk.
+    /// This is useful before critical operations or to ensure data durability.
+    /// </summary>
+    public async ValueTask FlushAsync(CancellationToken cancellationToken = default)
+    {
+        var flushTasks = new List<ValueTask>();
+        
+        foreach (var kvp in _queues)
+        {
+            var state = kvp.Value;
+            try
+            {
+                await state.Mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger?.LogWarning("Timeout acquiring mutex for queue {Queue} during flush", state.Name);
+                continue;
+            }
+
+            try
+            {
+                // Re-save state to ensure latest state is persisted
+                SaveState(state);
+            }
+            finally
+            {
+                state.Mutex.Release();
+            }
+        }
     }
 
     private QueueState GetOrCreate(string name)

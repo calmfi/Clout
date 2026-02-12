@@ -6,6 +6,7 @@ public interface IAmqpQueueServer
     void PurgeQueue(string name);
     ValueTask EnqueueAsync<T>(string name, T message, CancellationToken cancellationToken = default);
     ValueTask<T?> DequeueAsync<T>(string name, CancellationToken cancellationToken = default);
+    ValueTask FlushAsync(CancellationToken cancellationToken = default);
     IReadOnlyList<QueueStats> GetStats();
 }
 

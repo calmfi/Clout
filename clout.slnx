@@ -14,5 +14,6 @@
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="tests/Clout.Api.IntegrationTests/Clout.Host.IntegrationTests.csproj" />
+    <Project Path="tests/Clout.ServiceTests/Clout.ServiceTests.csproj" />
   </Folder>
 </Solution>
